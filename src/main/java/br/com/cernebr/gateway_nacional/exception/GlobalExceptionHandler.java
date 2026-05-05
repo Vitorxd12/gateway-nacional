@@ -9,6 +9,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 
 import java.net.URI;
 import java.time.OffsetDateTime;
@@ -43,6 +44,37 @@ public class GlobalExceptionHandler {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(
                 HttpStatus.BAD_REQUEST,
                 "A requisição contém campos inválidos. Verifique os erros e tente novamente."
+        );
+        problem.setTitle("Requisição inválida");
+        problem.setType(TYPE_VALIDATION);
+        problem.setInstance(URI.create(request.getRequestURI()));
+        problem.setProperty("timestamp", OffsetDateTime.now());
+        problem.setProperty("errors", fieldErrors);
+
+        return ResponseEntity.badRequest().body(problem);
+    }
+
+    @ExceptionHandler(HandlerMethodValidationException.class)
+    public ResponseEntity<ProblemDetail> handleMethodValidation(HandlerMethodValidationException ex,
+                                                                HttpServletRequest request) {
+        List<Map<String, String>> fieldErrors = ex.getParameterValidationResults().stream()
+                .flatMap(result -> result.getResolvableErrors().stream()
+                        .map(error -> Map.of(
+                                "field", result.getMethodParameter().getParameterName() != null
+                                        ? result.getMethodParameter().getParameterName()
+                                        : "param",
+                                "message", error.getDefaultMessage() != null
+                                        ? error.getDefaultMessage()
+                                        : "Valor inválido."
+                        )))
+                .toList();
+
+        log.warn("Method validation failure on {} {}: {} param(s) invalid",
+                request.getMethod(), request.getRequestURI(), fieldErrors.size());
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.BAD_REQUEST,
+                "A requisição contém parâmetros inválidos. Verifique os erros e tente novamente."
         );
         problem.setTitle("Requisição inválida");
         problem.setType(TYPE_VALIDATION);
