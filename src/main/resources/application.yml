@@ -1,0 +1,96 @@
+spring:
+  application:
+    name: gateway-nacional
+
+  # Habilita Virtual Threads (Project Loom / JEP 444).
+  # Cada request HTTP roda em uma virtual thread, permitindo altíssima concorrência
+  # em chamadas I/O-bound (ViaCEP, ReceitaWS) sem o custo de pool de threads tradicional.
+  threads:
+    virtual:
+      enabled: true
+
+  data:
+    redis:
+      # Redis é usado como cache distribuído de respostas (CEP/CNPJ).
+      # Em produção, sobrescrever via variável de ambiente SPRING_DATA_REDIS_HOST.
+      host: localhost
+      port: 6379
+      timeout: 2s
+      connect-timeout: 1s
+      lettuce:
+        pool:
+          enabled: true
+          max-active: 16
+          max-idle: 8
+          min-idle: 2
+
+server:
+  port: 8080
+  # Encerramento gracioso: drena requests em voo antes de finalizar (importante em rolling deploys).
+  shutdown: graceful
+
+# Actuator: expõe apenas o necessário para observabilidade externa.
+# Prometheus faz scrape em /actuator/prometheus; health é consumido por liveness/readiness probes.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      # Tag global em todas as métricas — facilita filtros por instância no Grafana.
+      application: ${spring.application.name}
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+# Documentação OpenAPI / Swagger UI.
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+
+# Configuração base do Resilience4j.
+# Janela deslizante por contagem (10 chamadas) — adequada para APIs externas de baixo throughput.
+# Failure rate 50% balanceia sensibilidade vs. ruído transitório do ViaCEP.
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        registerHealthIndicator: true        # Expõe estado do CB no /actuator/health
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 10             # Não abre antes de ter amostra mínima
+        failureRateThreshold: 50             # % de falhas para transicionar para OPEN
+        waitDurationInOpenState: 15s         # Tempo em OPEN antes de tentar HALF_OPEN
+        permittedNumberOfCallsInHalfOpenState: 3
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+    instances:
+      viaCepCircuitBreaker:
+        baseConfig: default
+
+  timelimiter:
+    configs:
+      default:
+        # APIs públicas brasileiras costumam ter latência variável; 3s é um teto razoável
+        # antes de cancelar a chamada e devolver fallback.
+        timeoutDuration: 3s
+        cancelRunningFuture: true
+    instances:
+      viaCepCircuitBreaker:
+        baseConfig: default
+
+logging:
+  level:
+    root: INFO
+    br.com.cernebr.gatewaynacional: DEBUG
+    io.github.resilience4j: INFO
