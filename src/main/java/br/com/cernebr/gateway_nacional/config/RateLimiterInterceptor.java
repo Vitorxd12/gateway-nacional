@@ -8,6 +8,7 @@ import io.github.bucket4j.distributed.proxy.ProxyManager;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
@@ -36,6 +37,7 @@ import java.util.function.Supplier;
  */
 @Slf4j
 @Component
+@ConditionalOnProperty(name = "gateway.rate-limit.enabled", havingValue = "true", matchIfMissing = true)
 public class RateLimiterInterceptor implements HandlerInterceptor {
 
     private static final URI TYPE_RATE_LIMIT =

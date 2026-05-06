@@ -6,6 +6,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -18,12 +19,12 @@ import org.springframework.web.client.RestClient;
 public class BrasilApiClient implements CnpjClientProvider {
 
     public static final String PROVIDER_NAME = "BrasilAPI-CNPJ";
-    private static final String BASE_URL = "https://brasilapi.com.br";
 
     private final RestClient restClient;
 
-    public BrasilApiClient(RestClient.Builder builder) {
-        this.restClient = builder.baseUrl(BASE_URL).build();
+    public BrasilApiClient(RestClient.Builder builder,
+                           @Value("${gateway.cnpj.brasilapi.base-url:https://brasilapi.com.br}") String baseUrl) {
+        this.restClient = builder.baseUrl(baseUrl).build();
     }
 
     @Override

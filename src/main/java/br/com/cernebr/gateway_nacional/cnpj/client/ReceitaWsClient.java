@@ -5,6 +5,7 @@ import br.com.cernebr.gateway_nacional.exception.ResourceUnavailableException;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -26,13 +27,13 @@ import java.util.List;
 public class ReceitaWsClient implements CnpjClientProvider {
 
     public static final String PROVIDER_NAME = "ReceitaWS";
-    private static final String BASE_URL = "https://www.receitaws.com.br";
     private static final String STATUS_ERROR = "ERROR";
 
     private final RestClient restClient;
 
-    public ReceitaWsClient(RestClient.Builder builder) {
-        this.restClient = builder.baseUrl(BASE_URL).build();
+    public ReceitaWsClient(RestClient.Builder builder,
+                           @Value("${gateway.cnpj.receitaws.base-url:https://www.receitaws.com.br}") String baseUrl) {
+        this.restClient = builder.baseUrl(baseUrl).build();
     }
 
     @Override
