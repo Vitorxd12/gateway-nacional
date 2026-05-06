@@ -11,7 +11,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  * scrape, Swagger UI, OpenAPI doc) remain unthrottled.
  */
 @Configuration
-@ConditionalOnProperty(name = "gateway.rate-limit.enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "gateway.rate-limit", name = "enabled", havingValue = "true")
 public class WebMvcConfig implements WebMvcConfigurer {
 
     private final RateLimiterInterceptor rateLimiterInterceptor;

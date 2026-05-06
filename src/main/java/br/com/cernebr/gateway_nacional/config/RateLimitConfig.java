@@ -29,7 +29,7 @@ import java.util.function.Supplier;
  * avoiding eager allocation for buckets that may never be created.</p>
  */
 @Configuration
-@ConditionalOnProperty(name = "gateway.rate-limit.enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "gateway.rate-limit", name = "enabled", havingValue = "true")
 public class RateLimitConfig {
 
     /**

@@ -29,6 +29,10 @@ server:
   # Encerramento gracioso: drena requests em voo antes de finalizar (importante em rolling deploys).
   shutdown: graceful
 
+gateway:
+  rate-limit:
+    enabled: false # Mantido desativado por padrão para uso corporativo (Self-Hosted). Para o Playground público, injetar env GATEWAY_RATE_LIMIT_ENABLED=true
+
 # Actuator: expõe apenas o necessário para observabilidade externa.
 # Prometheus faz scrape em /actuator/prometheus; health é consumido por liveness/readiness probes.
 management:

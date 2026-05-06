@@ -37,7 +37,7 @@ import java.util.function.Supplier;
  */
 @Slf4j
 @Component
-@ConditionalOnProperty(name = "gateway.rate-limit.enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "gateway.rate-limit", name = "enabled", havingValue = "true")
 public class RateLimiterInterceptor implements HandlerInterceptor {
 
     private static final URI TYPE_RATE_LIMIT =
