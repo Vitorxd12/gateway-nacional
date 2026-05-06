@@ -13,9 +13,9 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 
 /**
- * Orchestrates the cascade fallback across multiple CEP providers.
- * Order: ViaCEP → BrasilAPI → AwesomeAPI. Successful resolutions are cached
- * by CEP key, so subsequent lookups never hit upstream providers again.
+ * Orchestrates the cascade fallback across multiple CEP providers and applies
+ * in-memory IBGE enrichment before caching/returning the result.
+ * Order: ViaCEP → BrasilAPI → AwesomeAPI.
  */
 @Slf4j
 @Service
@@ -24,20 +24,24 @@ public class CepService {
     private static final String AGGREGATE_PROVIDER = "all-providers";
 
     private final List<CepClientProvider> providersInOrder;
+    private final IbgeEnrichmentService ibgeEnrichmentService;
 
     public CepService(ViaCepClient primary,
                       BrasilApiClient secondary,
-                      AwesomeApiClient tertiary) {
+                      AwesomeApiClient tertiary,
+                      IbgeEnrichmentService ibgeEnrichmentService) {
         this.providersInOrder = List.of(primary, secondary, tertiary);
+        this.ibgeEnrichmentService = ibgeEnrichmentService;
     }
 
     @Cacheable(cacheNames = "ceps", key = "#cep")
     public CepResponse findByCep(String cep) {
         for (CepClientProvider provider : providersInOrder) {
             try {
-                CepResponse response = provider.fetch(cep);
+                CepResponse raw = provider.fetch(cep);
+                CepResponse enriched = ibgeEnrichmentService.enrich(raw);
                 log.info("CEP {} resolved by provider={}", cep, provider.providerName());
-                return response;
+                return enriched;
             } catch (Exception ex) {
                 log.warn("Provider {} failed for cep={} ({}). Cascading to next provider.",
                         provider.providerName(), cep, ex.getMessage());
