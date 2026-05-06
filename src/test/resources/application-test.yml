@@ -1,0 +1,43 @@
+# Test profile overrides — wired by @ActiveProfiles("test") on the test classes.
+# Redis host/port and wiremock.server.port are injected at runtime via
+# @DynamicPropertySource in AbstractIntegrationTest.
+
+spring:
+  application:
+    name: gateway-nacional-test
+
+# Rate limiter is disabled so MockMvc can fire many requests without
+# hitting the 5/minute Playground policy.
+gateway:
+  rate-limit:
+    enabled: false
+  cep:
+    viacep:
+      base-url: http://localhost:${wiremock.server.port}
+    brasilapi:
+      base-url: http://localhost:${wiremock.server.port}
+    awesomeapi:
+      base-url: http://localhost:${wiremock.server.port}
+  cnpj:
+    brasilapi:
+      base-url: http://localhost:${wiremock.server.port}
+    receitaws:
+      base-url: http://localhost:${wiremock.server.port}
+    minhareceita:
+      base-url: http://localhost:${wiremock.server.port}
+
+# Lower CB threshold so a couple of mocked failures don't accidentally open it.
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        minimumNumberOfCalls: 100
+  timelimiter:
+    configs:
+      default:
+        timeoutDuration: 10s
+
+logging:
+  level:
+    org.springframework.web: INFO
+    com.github.tomakehurst.wiremock: WARN
