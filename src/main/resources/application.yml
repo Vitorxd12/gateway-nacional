@@ -77,11 +77,19 @@ resilience4j:
     instances:
       # Uma instância por provedor — isola estado (open/closed/half-open) por upstream,
       # evitando que falha do ViaCEP "contamine" a saúde percebida do BrasilAPI.
+      # CEP providers
       viaCepCB:
         baseConfig: default
       brasilApiCB:
         baseConfig: default
       awesomeApiCB:
+        baseConfig: default
+      # CNPJ providers
+      brasilApiCnpjCB:
+        baseConfig: default
+      receitaWsCB:
+        baseConfig: default
+      minhaReceitaCB:
         baseConfig: default
 
   timelimiter:
@@ -92,11 +100,19 @@ resilience4j:
         timeoutDuration: 3s
         cancelRunningFuture: true
     instances:
+      # CEP providers
       viaCepCB:
         baseConfig: default
       brasilApiCB:
         baseConfig: default
       awesomeApiCB:
+        baseConfig: default
+      # CNPJ providers
+      brasilApiCnpjCB:
+        baseConfig: default
+      receitaWsCB:
+        baseConfig: default
+      minhaReceitaCB:
         baseConfig: default
 
 logging:
