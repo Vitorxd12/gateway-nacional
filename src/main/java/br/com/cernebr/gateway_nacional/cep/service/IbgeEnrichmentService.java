@@ -2,7 +2,7 @@ package br.com.cernebr.gateway_nacional.cep.service;
 
 import br.com.cernebr.gateway_nacional.cep.dto.CepResponse;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
