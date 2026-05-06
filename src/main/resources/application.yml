@@ -95,6 +95,11 @@ resilience4j:
         baseConfig: default
       minhaReceitaCB:
         baseConfig: default
+      # Calendário providers
+      brasilApiFeriadosCB:
+        baseConfig: default
+      nagerDateCB:
+        baseConfig: default
 
   timelimiter:
     configs:
@@ -117,6 +122,11 @@ resilience4j:
       receitaWsCB:
         baseConfig: default
       minhaReceitaCB:
+        baseConfig: default
+      # Calendário providers
+      brasilApiFeriadosCB:
+        baseConfig: default
+      nagerDateCB:
         baseConfig: default
 
 logging:

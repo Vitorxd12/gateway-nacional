@@ -26,15 +26,18 @@ public class CacheConfig {
 
     private static final Duration DEFAULT_TTL = Duration.ofHours(24);
     private static final Duration CEPS_TTL = Duration.ofDays(30);
+    private static final Duration FERIADOS_TTL = Duration.ofDays(365);
 
     private static final String CEPS_CACHE = "ceps";
+    private static final String FERIADOS_CACHE = "feriados";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
         RedisCacheConfiguration defaultConfig = baseConfig().entryTtl(DEFAULT_TTL);
 
         Map<String, RedisCacheConfiguration> perCacheConfigs = Map.of(
-                CEPS_CACHE, baseConfig().entryTtl(CEPS_TTL)
+                CEPS_CACHE, baseConfig().entryTtl(CEPS_TTL),
+                FERIADOS_CACHE, baseConfig().entryTtl(FERIADOS_TTL)
         );
 
         return RedisCacheManager.builder(connectionFactory)
