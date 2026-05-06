@@ -27,9 +27,15 @@ public class CacheConfig {
     private static final Duration DEFAULT_TTL = Duration.ofHours(24);
     private static final Duration CEPS_TTL = Duration.ofDays(30);
     private static final Duration FERIADOS_TTL = Duration.ofDays(365);
+    private static final Duration TAXAS_TTL = Duration.ofHours(12);
+    private static final Duration RASTREIOS_TTL = Duration.ofHours(1);
+    private static final Duration BANCOS_TTL = Duration.ofDays(30);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
+    private static final String TAXAS_CACHE = "taxas";
+    private static final String RASTREIOS_CACHE = "rastreios";
+    private static final String BANCOS_CACHE = "bancos";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -37,7 +43,10 @@ public class CacheConfig {
 
         Map<String, RedisCacheConfiguration> perCacheConfigs = Map.of(
                 CEPS_CACHE, baseConfig().entryTtl(CEPS_TTL),
-                FERIADOS_CACHE, baseConfig().entryTtl(FERIADOS_TTL)
+                FERIADOS_CACHE, baseConfig().entryTtl(FERIADOS_TTL),
+                TAXAS_CACHE, baseConfig().entryTtl(TAXAS_TTL),
+                RASTREIOS_CACHE, baseConfig().entryTtl(RASTREIOS_TTL),
+                BANCOS_CACHE, baseConfig().entryTtl(BANCOS_TTL)
         );
 
         return RedisCacheManager.builder(connectionFactory)

@@ -22,6 +22,7 @@ Toda empresa brasileira que constrói software já passou por isso:
 - **Formatos divergentes** — ViaCEP devolve `localidade`, BrasilAPI devolve `city`. ReceitaWS retorna `nome`, MinhaReceita retorna `razao_social`. Cada provedor é uma migração de schema disfarçada.
 - **Dados auxiliares faltando** — Sua emissão de NF-e exige o código IBGE do município, mas metade dos provedores não devolve esse campo. Você precisa de uma tabela auxiliar e ninguém quer manter.
 - **Cálculo de dia útil B2B** — Faturamento, vencimento de boleto, prazo de SLA: todos exigem pular finais de semana **e feriados nacionais e estaduais**. Hoje cada time reimplementa isso de forma sutilmente errada.
+- **Cotação de índices financeiros** — Correção monetária de contratos, simulação de renda fixa, projeção de juros — tudo depende de Selic, CDI e IPCA atualizados. A API do Banco Central é instável e cada provedor alternativo retorna o JSON num formato sutilmente diferente.
 
 ## A Solução
 
@@ -63,6 +64,35 @@ Cascata: **BrasilAPI (com suporte estadual) → Nager.Date → Calculador in-mem
 - **Suporte a feriados estaduais** via BrasilAPI: passe `?siglaUf=SP` e a resposta inclui também os estaduais daquela UF.
 - **Cálculo de próximo dia útil** que pula sábados, domingos e feriados (nacionais sempre, estaduais quando UF informada). Atravessa virada de ano com recarga lazy do conjunto de feriados.
 - TTL de cache: **365 dias** (feriados não mudam dentro do ano em curso).
+
+### Catálogo de Bancos & ISPB
+
+Cascata: **BrasilAPI → Registro local in-memory (BACEN dump)**.
+
+- DTO unificado: `ispb` (8 dígitos), `nome` (razão abreviada), `codigo` (COMPE com 3 dígitos zero-pad), `nomeCompleto` (razão social).
+- **Normalização do código no controller** — `1`, `01` e `001` viram `001` antes de bater no `@Cacheable`. Garante uma única entrada Redis por instituição independentemente de como o cliente formate.
+- **Fallback in-memory de latência zero** — `LocalBacenBancoClient` carrega um JSON bundled em `@PostConstruct` para um `Map<String, BancoResponse>` indexado por COMPE. Mesmo com BrasilAPI fora, validar uma transferência continua sendo lookup O(1) offline.
+- Dois endpoints: lista completa (`GET /api/v1/bancos`) e busca unitária (`GET /api/v1/bancos/{codigo}`). Cache key da lista é o literal `'all'`, sem colisão com qualquer COMPE de 3 dígitos.
+- TTL de cache: **30 dias** (registros bancários mudam raramente; trade-off seguro pra reduzir tráfego upstream e latência ao mínimo).
+
+### Rastreio & Logística
+
+Cascata: **Link&Track → BrasilAPI → Correios Oficial**.
+
+- DTO unificado: `codigo` (uppercase canônico), `isEntregue` (boolean) e `eventos` ordenados **do mais recente para o mais antigo**.
+- **Inferência de `isEntregue` no service**: scan dos eventos por status contendo `"ENTREG"` (case-insensitive). Independe de qual provedor responder — clientes confiam no boolean sem precisar inspecionar a timeline.
+- **Date-time merge no ACL**: Link&Track retorna `data` (`dd/MM/yyyy`) e `hora` (`HH:mm`) separados — o Record interno faz o merge para `LocalDateTime`. BrasilAPI e Correios assumem ISO-8601 nativo.
+- TTL de cache: **1 hora** (curto porque rastreio é *time-sensitive* — clientes acompanham status no app dos Correios e cobram do CRM se não bater; janela balanceia frescor vs. carga upstream).
+
+### Taxas — Índices Financeiros
+
+Cascata: **BrasilAPI → BCB SGS → HG Brasil**.
+
+- DTO unificado: `nome` (sigla canônica em uppercase), `valor` (`BigDecimal` — sem drift de ponto flutuante em cálculos financeiros), `dataReferencia`.
+- **BCB SGS** (Sistema Gerenciador de Séries Temporais do Banco Central) é série-codificado: o gateway mantém um map interno `{CDI=12, SELIC=11, IPCA=433}` e absorve as peculiaridades do payload (data em `dd/MM/yyyy`, valor como string numérica) na camada de Anti-Corruption.
+- **HG Brasil** cobre apenas Selic e CDI no endpoint `/finance/taxes`. Para IPCA, esse provedor cascateia explicitamente via exceção — só é problema se BrasilAPI **e** BCB SGS estiverem fora simultaneamente para IPCA.
+- Cache key normalizado para uppercase via SpEL (`#sigla.toUpperCase()`) — `cdi`, `Cdi` e `CDI` compartilham a mesma entrada.
+- TTL de cache: **12 horas** (publicação diária do BCB; refresh duas vezes por dia captura mudanças do COPOM no mesmo dia útil).
 
 ---
 
@@ -180,6 +210,71 @@ curl "http://localhost:8080/api/v1/calendario/proximo-dia-util?data=2025-07-09&s
 }
 ```
 
+### Bancos — exemplos
+
+```bash
+# Catálogo completo (cacheado por 30 dias)
+curl http://localhost:8080/api/v1/bancos
+
+# Banco do Brasil — `1`, `01` e `001` são equivalentes
+curl http://localhost:8080/api/v1/bancos/001
+
+# Nubank — código sem zero à esquerda também funciona
+curl http://localhost:8080/api/v1/bancos/260
+```
+
+```json
+{
+  "ispb": "00000000",
+  "nome": "BCO DO BRASIL S.A.",
+  "codigo": "001",
+  "nomeCompleto": "Banco do Brasil S.A."
+}
+```
+
+### Rastreio — exemplos
+
+```bash
+# Status atual de uma encomenda (case-insensitive)
+curl http://localhost:8080/api/v1/rastreio/LB123456789BR
+```
+
+```json
+{
+  "codigo": "LB123456789BR",
+  "isEntregue": false,
+  "eventos": [
+    {
+      "dataHora": "2026-05-05T14:23:00",
+      "local": "Centro de Distribuição - São Paulo/SP",
+      "status": "Em trânsito",
+      "descricao": "Objeto em trânsito para a unidade de distribuição"
+    }
+  ]
+}
+```
+
+### Taxas — exemplos
+
+```bash
+# CDI atual (case-insensitive)
+curl http://localhost:8080/api/v1/taxas/cdi
+
+# Selic em uppercase — mesma entrada de cache
+curl http://localhost:8080/api/v1/taxas/SELIC
+
+# IPCA — atendido por BrasilAPI ou BCB SGS (HG Brasil não cobre)
+curl http://localhost:8080/api/v1/taxas/ipca
+```
+
+```json
+{
+  "nome": "CDI",
+  "valor": 10.65,
+  "dataReferencia": "2026-05-05"
+}
+```
+
 ### Endpoints expostos
 
 | Método | Rota | Descrição |
@@ -188,6 +283,10 @@ curl "http://localhost:8080/api/v1/calendario/proximo-dia-util?data=2025-07-09&s
 | `GET` | `/api/v1/cnpj/{cnpj}` | Resolução de CNPJ com fallback em cascata. |
 | `GET` | `/api/v1/calendario/feriados/{ano}` | Lista de feriados (use `?siglaUf=SP` para incluir estaduais). |
 | `GET` | `/api/v1/calendario/proximo-dia-util` | Próximo dia útil (params: `data=yyyy-MM-dd`, `siglaUf` opcional). |
+| `GET` | `/api/v1/taxas/{sigla}` | Cotação de índice financeiro (`cdi`, `selic` ou `ipca`, case-insensitive). |
+| `GET` | `/api/v1/rastreio/{codigo}` | Histórico de eventos de uma encomenda dos Correios (padrão `LB123456789BR`). |
+| `GET` | `/api/v1/bancos` | Catálogo completo de instituições financeiras (ISPB + COMPE). |
+| `GET` | `/api/v1/bancos/{codigo}` | Instituição por código COMPE (1 a 3 dígitos, zero-pad opcional). |
 | `GET` | `/swagger-ui.html` | Documentação interativa da API. |
 | `GET` | `/v3/api-docs` | Schema OpenAPI 3 (JSON). |
 | `GET` | `/actuator/health` | Liveness/Readiness probes. |

@@ -32,6 +32,31 @@ server:
 gateway:
   rate-limit:
     enabled: false # Mantido desativado por padrão para uso corporativo (Self-Hosted). Para o Playground público, injetar env GATEWAY_RATE_LIMIT_ENABLED=true
+  # Base URLs por provedor — sobrescritas em test profile (WireMock) e
+  # eventualmente em deploys que precisem apontar para mirrors internos.
+  taxas:
+    brasilapi:
+      base-url: https://brasilapi.com.br
+    bcb-sgs:
+      base-url: https://api.bcb.gov.br
+    hg-brasil:
+      base-url: https://api.hgbrasil.com
+      api-key: development
+  rastreio:
+    linketrack:
+      base-url: https://api.linketrack.com
+      user: teste
+      # Token público de testes do Link&Track — para SLA produtivo, sobrescrever via env.
+      token: 1abcd00b2731640e886fb41a8a9671ad1434c599dbaa0a0de9a5aa619f29a83f
+    brasilapi:
+      base-url: https://brasilapi.com.br
+      path: /api/corretoras/v1/{codigo}
+    correios-oficial:
+      base-url: https://api.correios.com.br
+      path: /srorastro/v1/objetos/{codigo}
+  bancos:
+    brasilapi:
+      base-url: https://brasilapi.com.br
 
 # Actuator: expõe apenas o necessário para observabilidade externa.
 # Prometheus faz scrape em /actuator/prometheus; health é consumido por liveness/readiness probes.
@@ -100,6 +125,23 @@ resilience4j:
         baseConfig: default
       nagerDateCB:
         baseConfig: default
+      # Taxas providers
+      brasilApiTaxasCB:
+        baseConfig: default
+      bcbSgsCB:
+        baseConfig: default
+      hgBrasilCB:
+        baseConfig: default
+      # Rastreio providers
+      linkAndTrackCB:
+        baseConfig: default
+      brasilApiRastreioCB:
+        baseConfig: default
+      correiosOficialCB:
+        baseConfig: default
+      # Bancos providers
+      brasilApiBancosCB:
+        baseConfig: default
 
   timelimiter:
     configs:
@@ -127,6 +169,23 @@ resilience4j:
       brasilApiFeriadosCB:
         baseConfig: default
       nagerDateCB:
+        baseConfig: default
+      # Taxas providers
+      brasilApiTaxasCB:
+        baseConfig: default
+      bcbSgsCB:
+        baseConfig: default
+      hgBrasilCB:
+        baseConfig: default
+      # Rastreio providers
+      linkAndTrackCB:
+        baseConfig: default
+      brasilApiRastreioCB:
+        baseConfig: default
+      correiosOficialCB:
+        baseConfig: default
+      # Bancos providers
+      brasilApiBancosCB:
         baseConfig: default
 
 logging:
