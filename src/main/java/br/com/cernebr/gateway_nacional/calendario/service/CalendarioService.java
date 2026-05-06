@@ -23,14 +23,17 @@ import java.util.Set;
  * Orchestrates the cascade for Brazilian holiday lookup.
  * Order: BrasilAPI → Nager.Date → in-memory deterministic calculator.
  *
+ * <p>{@code siglaUf} is honored only by BrasilAPI (which exposes a state-aware
+ * endpoint). The two fallback providers ignore it and return federal holidays
+ * only. Consumers therefore lose <i>state-level</i> coverage exactly when the
+ * primary upstream is unavailable — a deliberate degradation that keeps the
+ * "next business day" computation conservative (skipping a regional holiday
+ * the gateway cannot enumerate would silently return a non-banking day).</p>
+ *
  * <p>Because the calculator is the last provider in the chain and never
  * fails, this service never throws {@link ResourceUnavailableException} for
  * the holiday lookup itself — the gateway always answers. The exception
  * exists in the signature only for unforeseen pathological inputs.</p>
- *
- * <p>TODO: Implementar suporte a feriados estaduais e municipais passando a UF
- * ou código IBGE. Provedor primário (BrasilAPI) suporta, mas exige refatoração
- * da assinatura do endpoint para receber localização.</p>
  */
 @Slf4j
 @Service
@@ -53,19 +56,26 @@ public class CalendarioService {
         this.meterRegistry = meterRegistry;
     }
 
-    @Cacheable(cacheNames = "feriados", key = "#ano")
-    public List<FeriadoResponse> findByAno(int ano) {
+    /**
+     * Cache key is composite — {@code "{year}-{uf-or-BR}"} — so that a national
+     * lookup and a state-scoped lookup never collide. The {@code siglaUf}
+     * received here is already normalized (uppercase, blank → null) by the
+     * controller.
+     */
+    @Cacheable(cacheNames = "feriados", key = "#ano + '-' + (#siglaUf != null ? #siglaUf : 'BR')")
+    public List<FeriadoResponse> findByAno(int ano, String siglaUf) {
         for (FeriadoClientProvider provider : providersInOrder) {
             Timer.Sample sample = Timer.start(meterRegistry);
             try {
-                List<FeriadoResponse> feriados = provider.fetch(ano);
+                List<FeriadoResponse> feriados = provider.fetch(ano, siglaUf);
                 recordOutcome(provider.providerName(), "success", sample);
-                log.info("Holidays for ano={} resolved by provider={}", ano, provider.providerName());
+                log.info("Holidays for ano={} siglaUf={} resolved by provider={}",
+                        ano, siglaUf, provider.providerName());
                 return feriados;
             } catch (Exception ex) {
                 recordOutcome(provider.providerName(), "failure", sample);
-                log.warn("Provider {} failed for ano={} ({}). Cascading to next provider.",
-                        provider.providerName(), ano, ex.getMessage());
+                log.warn("Provider {} failed for ano={} siglaUf={} ({}). Cascading to next provider.",
+                        provider.providerName(), ano, siglaUf, ex.getMessage());
             }
         }
         // Should be unreachable: the offline calculator never throws.
@@ -75,19 +85,20 @@ public class CalendarioService {
 
     /**
      * Returns the next business day starting from {@code dataBase} (inclusive).
-     * Skips Saturdays, Sundays, and any national holiday matching the date.
+     * Skips Saturdays, Sundays and holidays from the cascade — including
+     * state-level ones when {@code siglaUf} is informed.
      * Crosses year boundaries cleanly by reloading the holiday set on demand.
      */
-    public LocalDate calcularProximoDiaUtil(LocalDate dataBase) {
+    public LocalDate calcularProximoDiaUtil(LocalDate dataBase, String siglaUf) {
         int currentYear = dataBase.getYear();
-        Set<LocalDate> feriadosDoAno = holidayDatesFor(currentYear);
+        Set<LocalDate> feriadosDoAno = holidayDatesFor(currentYear, siglaUf);
 
         LocalDate candidato = dataBase;
         while (isWeekend(candidato) || feriadosDoAno.contains(candidato)) {
             candidato = candidato.plusDays(1);
             if (candidato.getYear() != currentYear) {
                 currentYear = candidato.getYear();
-                feriadosDoAno = holidayDatesFor(currentYear);
+                feriadosDoAno = holidayDatesFor(currentYear, siglaUf);
             }
         }
         return candidato;
@@ -101,9 +112,9 @@ public class CalendarioService {
         return ChronoUnit.DAYS.between(dataBase, proximoDiaUtil);
     }
 
-    private Set<LocalDate> holidayDatesFor(int ano) {
+    private Set<LocalDate> holidayDatesFor(int ano, String siglaUf) {
         Set<LocalDate> dates = new HashSet<>(16);
-        for (FeriadoResponse feriado : findByAno(ano)) {
+        for (FeriadoResponse feriado : findByAno(ano, siglaUf)) {
             dates.add(feriado.data());
         }
         return dates;

@@ -29,7 +29,10 @@ public class FeriadoNacionalCalculadorService implements FeriadoClientProvider {
     private static final String TIPO = "Nacional";
 
     @Override
-    public List<FeriadoResponse> fetch(int ano) {
+    public List<FeriadoResponse> fetch(int ano, String siglaUf) {
+        // siglaUf intentionally ignored: the offline calculator covers
+        // federal holidays only. State-level rules are out of scope here —
+        // BrasilAPI is the authoritative source for those.
         return calcularFeriadosNacionais(ano);
     }
 

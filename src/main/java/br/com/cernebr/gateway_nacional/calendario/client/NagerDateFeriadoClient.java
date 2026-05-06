@@ -19,6 +19,12 @@ import java.util.List;
  * <p>Uses {@code localName} (the Portuguese name) instead of {@code name}
  * (which is the English translation). Returns broader metadata which we
  * ignore via {@code @JsonIgnoreProperties}.</p>
+ *
+ * <p><b>Scope limitation:</b> Nager.Date does not expose state-level holidays
+ * for Brazil. The {@code siglaUf} parameter is accepted for interface
+ * conformance and consciously <i>ignored</i> — when this provider serves the
+ * cascade, the consumer gets national holidays only. This is the documented
+ * trade-off when BrasilAPI is unavailable.</p>
  */
 @Slf4j
 @Component
@@ -39,7 +45,8 @@ public class NagerDateFeriadoClient implements FeriadoClientProvider {
 
     @Override
     @CircuitBreaker(name = "nagerDateCB", fallbackMethod = "fallback")
-    public List<FeriadoResponse> fetch(int ano) {
+    public List<FeriadoResponse> fetch(int ano, String siglaUf) {
+        // siglaUf intentionally ignored: provider does not expose state holidays.
         List<NagerDatePayload> payload = restClient.get()
                 .uri("/api/v3/PublicHolidays/{ano}/BR", ano)
                 .retrieve()
@@ -58,8 +65,9 @@ public class NagerDateFeriadoClient implements FeriadoClientProvider {
     }
 
     @SuppressWarnings("unused")
-    private List<FeriadoResponse> fallback(int ano, Throwable cause) {
-        log.warn("Nager.Date fallback triggered for ano={} cause={}", ano, cause.toString());
+    private List<FeriadoResponse> fallback(int ano, String siglaUf, Throwable cause) {
+        log.warn("Nager.Date fallback triggered for ano={} siglaUf={} cause={}",
+                ano, siglaUf, cause.toString());
         throw new ResourceUnavailableException(PROVIDER_NAME,
                 "Nager.Date indisponível ou Circuit Breaker aberto.", cause);
     }

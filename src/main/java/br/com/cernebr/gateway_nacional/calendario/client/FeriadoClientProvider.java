@@ -12,16 +12,20 @@ import java.util.List;
 public interface FeriadoClientProvider {
 
     /**
-     * Returns the federal holiday list for the given Gregorian year.
+     * Returns the holiday list for the given Gregorian year, optionally
+     * scoped to a Brazilian state.
      *
-     * @param ano year (4 digits, already validated at the controller boundary)
-     * @return non-null, non-empty list of national holidays
+     * @param ano      year (4 digits, validated at the controller boundary)
+     * @param siglaUf  uppercase 2-letter state code (e.g. {@code "SP"}) or
+     *                 {@code null} to request only national holidays.
+     *                 Already normalized by the caller.
+     * @return non-null, non-empty list of holidays
      * @throws br.com.cernebr.gateway_nacional.exception.ResourceUnavailableException
      *         when an HTTP provider is unreachable, returns empty/error payload,
      *         or the Circuit Breaker is OPEN. The in-memory calculator never
      *         throws this exception — it is the safety net of last resort.
      */
-    List<FeriadoResponse> fetch(int ano);
+    List<FeriadoResponse> fetch(int ano, String siglaUf);
 
     /**
      * Stable provider identifier used for logging and observability tags.
