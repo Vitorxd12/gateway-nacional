@@ -1,0 +1,5 @@
+[
+  { "uf": "SP", "localidade": "São Paulo", "ibge": "3550308" },
+  { "uf": "SE", "localidade": "Aracaju", "ibge": "2800308" },
+  { "uf": "RJ", "localidade": "Rio de Janeiro", "ibge": "3304557" }
+]
