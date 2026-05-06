@@ -75,7 +75,13 @@ resilience4j:
         permittedNumberOfCallsInHalfOpenState: 3
         automaticTransitionFromOpenToHalfOpenEnabled: true
     instances:
-      viaCepCircuitBreaker:
+      # Uma instância por provedor — isola estado (open/closed/half-open) por upstream,
+      # evitando que falha do ViaCEP "contamine" a saúde percebida do BrasilAPI.
+      viaCepCB:
+        baseConfig: default
+      brasilApiCB:
+        baseConfig: default
+      awesomeApiCB:
         baseConfig: default
 
   timelimiter:
@@ -86,7 +92,11 @@ resilience4j:
         timeoutDuration: 3s
         cancelRunningFuture: true
     instances:
-      viaCepCircuitBreaker:
+      viaCepCB:
+        baseConfig: default
+      brasilApiCB:
+        baseConfig: default
+      awesomeApiCB:
         baseConfig: default
 
 logging:
