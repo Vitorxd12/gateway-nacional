@@ -57,6 +57,12 @@ gateway:
   bancos:
     brasilapi:
       base-url: https://brasilapi.com.br
+  fipe:
+    brasilapi:
+      base-url: https://brasilapi.com.br
+    parallelum:
+      base-url: https://parallelum.com.br
+      path: /fipe/api/v1/carros/veiculos/{codigoFipe}/{anoModelo}
 
 # Actuator: expõe apenas o necessário para observabilidade externa.
 # Prometheus faz scrape em /actuator/prometheus; health é consumido por liveness/readiness probes.
@@ -142,6 +148,11 @@ resilience4j:
       # Bancos providers
       brasilApiBancosCB:
         baseConfig: default
+      # FIPE providers
+      brasilApiFipeCB:
+        baseConfig: default
+      parallelumFipeCB:
+        baseConfig: default
 
   timelimiter:
     configs:
@@ -186,6 +197,11 @@ resilience4j:
         baseConfig: default
       # Bancos providers
       brasilApiBancosCB:
+        baseConfig: default
+      # FIPE providers
+      brasilApiFipeCB:
+        baseConfig: default
+      parallelumFipeCB:
         baseConfig: default
 
 logging:

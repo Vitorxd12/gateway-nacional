@@ -30,12 +30,14 @@ public class CacheConfig {
     private static final Duration TAXAS_TTL = Duration.ofHours(12);
     private static final Duration RASTREIOS_TTL = Duration.ofHours(1);
     private static final Duration BANCOS_TTL = Duration.ofDays(30);
+    private static final Duration FIPE_TTL = Duration.ofDays(15);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
     private static final String TAXAS_CACHE = "taxas";
     private static final String RASTREIOS_CACHE = "rastreios";
     private static final String BANCOS_CACHE = "bancos";
+    private static final String FIPE_CACHE = "fipe";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -46,7 +48,8 @@ public class CacheConfig {
                 FERIADOS_CACHE, baseConfig().entryTtl(FERIADOS_TTL),
                 TAXAS_CACHE, baseConfig().entryTtl(TAXAS_TTL),
                 RASTREIOS_CACHE, baseConfig().entryTtl(RASTREIOS_TTL),
-                BANCOS_CACHE, baseConfig().entryTtl(BANCOS_TTL)
+                BANCOS_CACHE, baseConfig().entryTtl(BANCOS_TTL),
+                FIPE_CACHE, baseConfig().entryTtl(FIPE_TTL)
         );
 
         return RedisCacheManager.builder(connectionFactory)

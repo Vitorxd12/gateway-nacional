@@ -104,7 +104,7 @@ Use o padrão **Given / When / Then** com comentários explícitos delimitando o
 O projeto adota estritamente *Package by Feature*. Cada domínio é um pacote raiz autocontido:
 
 ```
-br.com.cernebr.gateway_nacional.{cep,cnpj,calendario,taxas,rastreio,bancos}
+br.com.cernebr.gateway_nacional.{cep,cnpj,calendario,taxas,rastreio,bancos,fipe}
                                   └── client/      (clients HTTP + Anti-Corruption Layer)
                                   └── controller/  (endpoints REST)
                                   └── dto/         (DTO unificado do domínio)

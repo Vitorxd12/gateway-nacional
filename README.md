@@ -65,6 +65,16 @@ Cascata: **BrasilAPI (com suporte estadual) → Nager.Date → Calculador in-mem
 - **Cálculo de próximo dia útil** que pula sábados, domingos e feriados (nacionais sempre, estaduais quando UF informada). Atravessa virada de ano com recarga lazy do conjunto de feriados.
 - TTL de cache: **365 dias** (feriados não mudam dentro do ano em curso).
 
+### Tabela FIPE — Cotação de Veículos
+
+Cascata: **BrasilAPI → Parallelum**.
+
+- DTO unificado: `codigoFipe`, `marca`, `modelo`, `anoModelo` (`int` — `32000` indica Zero KM, convenção FIPE), `combustivel`, `preco` (`BigDecimal`) e `mesReferencia`.
+- **Parsing de moeda BR no ACL**: ambos provedores devolvem `valor` formatado como `"R$ 80.444,00"`. O Anti-Corruption Layer faz strip do prefixo, troca de separadores (`.` thousands → vazio, `,` decimal → `.`) e converte para `BigDecimal` — financial-grade, sem drift.
+- **Filtro client-side por ano no BrasilAPI**: o endpoint primário retorna **todos os anos** do mesmo `codigoFipe` numa array; o ACL seleciona o entry com `anoModelo` solicitado, lançando `ResourceUnavailableException` se nenhum casar (cascateia para Parallelum).
+- **Path do Parallelum configurável** via property — endpoints da Parallelum mudam ocasionalmente; override sem PR.
+- TTL de cache: **15 dias** (FIPE publica mensalmente; janela balanceia ver o novo mês-de-referência logo após cada ciclo de publicação vs. evitar tráfego upstream redundante).
+
 ### Catálogo de Bancos & ISPB
 
 Cascata: **BrasilAPI → Registro local in-memory (BACEN dump)**.
@@ -210,6 +220,28 @@ curl "http://localhost:8080/api/v1/calendario/proximo-dia-util?data=2025-07-09&s
 }
 ```
 
+### FIPE — exemplos
+
+```bash
+# VW Cross UP! 2018 — código FIPE no padrão 000000-0
+curl http://localhost:8080/api/v1/fipe/preco/005340-0/2018
+
+# Veículo Zero KM — sentinela 32000 da FIPE
+curl http://localhost:8080/api/v1/fipe/preco/005340-0/32000
+```
+
+```json
+{
+  "codigoFipe": "005340-0",
+  "marca": "Volkswagen",
+  "modelo": "Cross UP! TSI 1.0 12V Total Flex",
+  "anoModelo": 2018,
+  "combustivel": "Gasolina",
+  "preco": 80444.00,
+  "mesReferencia": "março de 2024"
+}
+```
+
 ### Bancos — exemplos
 
 ```bash
@@ -287,6 +319,7 @@ curl http://localhost:8080/api/v1/taxas/ipca
 | `GET` | `/api/v1/rastreio/{codigo}` | Histórico de eventos de uma encomenda dos Correios (padrão `LB123456789BR`). |
 | `GET` | `/api/v1/bancos` | Catálogo completo de instituições financeiras (ISPB + COMPE). |
 | `GET` | `/api/v1/bancos/{codigo}` | Instituição por código COMPE (1 a 3 dígitos, zero-pad opcional). |
+| `GET` | `/api/v1/fipe/preco/{codigoFipe}/{anoModelo}` | Cotação FIPE de veículo (padrão `000000-0` + ano `yyyy` ou `32000` para Zero KM). |
 | `GET` | `/swagger-ui.html` | Documentação interativa da API. |
 | `GET` | `/v3/api-docs` | Schema OpenAPI 3 (JSON). |
 | `GET` | `/actuator/health` | Liveness/Readiness probes. |
