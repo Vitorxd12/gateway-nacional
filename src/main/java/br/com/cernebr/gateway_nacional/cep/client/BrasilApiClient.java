@@ -13,7 +13,7 @@ import org.springframework.web.client.RestClient;
  * v1 endpoint does not expose 'complemento' nor IBGE code.
  */
 @Slf4j
-@Component
+@Component("cepBrasilApiClient")
 public class BrasilApiClient implements CepClientProvider {
 
     public static final String PROVIDER_NAME = "BrasilAPI";
