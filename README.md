@@ -75,6 +75,118 @@ Cascata: **BrasilAPI → Parallelum**.
 - **Path do Parallelum configurável** via property — endpoints da Parallelum mudam ocasionalmente; override sem PR.
 - TTL de cache: **15 dias** (FIPE publica mensalmente; janela balanceia ver o novo mês-de-referência logo após cada ciclo de publicação vs. evitar tráfego upstream redundante).
 
+### Placa — Identificação de Veículos
+
+Cascata: **WDApi → Keplaca → PlacaFipe (Web Scraping)**.
+
+> 🆓 **Modo 100% Gratuito**: o terceiro provedor é um scraper Jsoup de `placafipe.com` que dispensa qualquer token. Em deploys sem credenciais paid (WDApi/Keplaca), a resolução de placa **continua funcionando** via cascata. E mais: o PlacaFipe é o único provedor que entrega o **`codigoFipe`** já mapeado, alimentando o módulo Avaliação sem exigir o código FIPE manualmente do cliente.
+
+- DTO unificado: `placa` (uppercase canônico, sem hífen), `marca`, `modelo`, `anoFabricacao`, `anoModelo`, `chassi` (mascarado, ver abaixo), `municipio`, `uf`, `codigoFipe` (nullable — populado apenas quando o provedor publica essa associação, hoje só PlacaFipe).
+- **Aceita ambos os padrões**: antigo (`ABC1234`) e Mercosul (`ABC1D23`), case-insensitive. Regex `^[A-Za-z]{3}[0-9][A-Za-z0-9][0-9]{2}$`.
+- **Privacy-by-architecture: chassi mascarado no ACL**. O chassi completo (17 chars) entra no Record interno do client mas **nunca** chega ao DTO de saída — a conversão devolve `***` + últimos 4 caracteres. Logs, cache e response sempre mascarados; impossível vazar acidentalmente. Vale para os 3 provedores: o `PlacaFipeScraperClient` também passa pelo `ChassiMask` antes de devolver.
+- **Fail-safe de credencial**: o `KeplacaClient` detecta o token-placeholder (`your_token_here`) antes de qualquer chamada HTTP e curto-circuita lançando `ResourceUnavailableException`. A cascata absorve normalmente — em dev sem token, o gateway depende do WDApi e do PlacaFipe sem NullPointer ou 401 ruidosos.
+- **PlacaFipe — fallback de Web Scraping com enriquecimento FIPE**: GET HTML defensivo com `User-Agent`, `Referer`, `Accept-Language` em `https://placafipe.com/placa/{placa}`. Em vez de hard-codar seletores frágeis, o ACL varre toda estrutura conhecida de label-value (`<tr>th/td`, `<tr>td/td`, `<dl>dt/dd`) e indexa em `Map<labelNormalizado, valor>` — depois faz lookup pelos rótulos canônicos com aliases (`marca`, `modelo`, `ano fabricacao`/`ano de fabricacao`, `ano modelo`, `chassi`/`chassis`, `municipio`/`cidade`, `uf`/`estado`, `codigo fipe`/`fipe`). Quando o site redesenhar a página, basta o tipo de wrap (table/dl) sobreviver — labels mudaram? só adicionar alias. Código FIPE coletado é normalizado para `000000-0` (zero-pad) compatível com a regex do `/api/v1/fipe/preco/...`.
+- **Composição com Avaliação**: o controller `/api/v1/avaliacao/placa/{placa}` aceita `?codigoFipe=` opcional; quando o PlacaFipe resolve a cascata, esse campo já vem dentro do `dadosVeiculo` e o caller pode encadear sem fricção. **Token-free de ponta a ponta**.
+- 3 Circuit Breakers isolados (`wdApiPlacaCB`, `keplacaCB`, `placaFipeScraperCB`) — falha de scraper nunca contamina a saúde percebida das APIs pagas, e vice-versa.
+- TTL de cache: **365 dias** (a vinculação placa-veículo é essencialmente permanente para a vida útil do registro).
+
+### 🏥 Saúde Pública (APS) — Inteligência Financeira do SUS
+
+Auditoria automatizada dos repasses federais da Atenção Primária à Saúde — duas rotas atômicas que substituem horas de trabalho manual em PDFs do FNS e portais lentos do e-Gestor.
+
+**Contexto de negócio**: prefeituras e consultorias perdem milhões em repasses suspensos por irregularidade na composição de equipes APS. A auditoria normalmente é feita olho-no-olho em portais governamentais; este módulo expõe os dois mais críticos como JSON limpo, com cache agressivo e Circuit Breaker isolado por upstream.
+
+- **FNS — Fundo Nacional de Saúde** (`/api/v1/saude/fns/{ibge}?competencia=yyyy-MM`): apesar do portal ser uma SPA, os dados vêm de dois endpoints JSON internos (descoberta de UG/CNPJ → repasses detalhados). O gateway cascateia automaticamente entre as UGs publicadas para a cidade quando a primeira retorna vazio (caso clássico: Fundo Municipal de Saúde com CNPJ distinto da prefeitura), e flipa entre `tipoConsulta=2` e `tipoConsulta=1` — a mesma estratégia consagrada do pipeline interno **AutoAPSFinancias**.
+- **e-Gestor APS** (`/api/v1/saude/egestor/{ibge}?competencia=yyyy-MM`): pipeline JSON puro de três etapas (menu de parcelas → componentes de pagamento → relatório detalhado). O gateway varre todos os componentes do bloco APS (ESF, ESB, eMulti, ACS), agrega por `INE + tipoEquipe` e devolve **uma linha por equipe** com valor de custeio total e status de suspensão consolidado.
+- **DTOs unificados**:
+  - `RepasseFnsResponse(codigoIbge, competencia "yyyy-MM", bloco, valorTotal BigDecimal)` — bloco vem de `grupoAcao.nome` (ou `descricao` em fallback);
+  - `EquipeEGestorResponse(ine, tipoEquipe, valorCusteio BigDecimal, statusSuspensao)` — `NÃO SUSPENSO` por padrão; quando o e-Gestor expõe motivo (`dsMotivoSuspensao`, `motivoSuspensao` etc.), o texto é propagado verbatim.
+- **ACL alias-tolerante**: o e-Gestor espalha o mesmo conceito por vários nomes de campo (`coEquipe`/`coEquipeEsb`/`nuIne` para INE, `tpEquipe`/`coTipoEquipe` para tipo). O ACL escolhe o primeiro não-vazio — renames upstream não quebram consumidores.
+- **Validação de IBGE**: regex `^[0-9]{6,7}$`. Aceita o formato canônico SUS (6 dígitos) e o formato com dígito verificador (7 dígitos — gateway trunca). UF é derivada in-memory dos 2 primeiros dígitos via tabela completa das 27 UFs (`IbgeUfLookup`); validação de competência via `^[0-9]{4}-(0[1-9]|1[0-2])$`.
+- **Resiliência**: dois Circuit Breakers isolados (`fnsScraperCB`, `eGestorScraperCB`) com timeout estendido de **15s** — gov.br é lento, e o ciclo do FNS exige duas chamadas sequenciais. Parses defensivos com `try/catch` no nível do item; quando a estrutura JSON muda, a linha é descartada silenciosamente em vez de derrubar o lote inteiro.
+- **TTL de cache: 15 dias** (publicação federal é mensal e raramente revisada na janela; cada chamada FNS é multi-etapa e martelar o portal triggera anti-bot — cache agressivo é defensivo, não cosmético).
+- **Caveat anti-bot do FNS**: o pipeline original AutoAPSFinancias aquece cookies via headless Chrome antes de bater nos endpoints. O gateway tenta a chamada direta com headers de browser (`User-Agent`, `Referer`, `X-Requested-With`); quando gov.br aplica anti-bot pesado, o CB trips e a resposta vira **503 com mensagem clara**. Embarcar Selenium no gateway seria 200MB+ de dependência — para deploys que precisam dessa robustez, o caminho é um sidecar de warmup externo.
+
+#### Camada Estrutural — Quem Trabalha Onde, e Quem Enviou Produção
+
+Duas rotas atômicas que respondem a perguntas que toda auditoria APS faz:
+
+- **CNES — Profissionais por Estabelecimento** (`/api/v1/saude/cnes/{cnesBase}/profissionais?ibge={ibge}`): JSON puro do DATASUS em duas etapas — lista de equipes do estabelecimento (`/services/estabelecimentos-equipes/{ibge}{cnes}`) seguida da lista de profissionais por equipe (`/services/.../profissionais/{ibge}{cnes}` com `coArea` + `coEquipe`). DTO unificado: `cnesDaUnidade`, `ineEquipe` (zero-pad 10 dígitos), `nome`, `cns`, `cbo`, `cargaHoraria` (soma `chAmb + chOutros`), `dataEntrada` (formato verbatim do upstream).
+  - **Por que `ibge` é obrigatório**: o CNES indexa por chave composta `{ibge}{cnes}` — código CNES de 7 dígitos não é único entre municípios. O Swagger explicita esse contrato.
+  - ACL alias-tolerante (4 aliases para nome, 5 para CNS, 5 para data de entrada) — renames upstream do DATASUS não quebram consumidores.
+- **SISAB — Validação da Produção** (`/api/v1/saude/sisab/{ibge}/producao?competencia=yyyy-MM`): a única rota da Saúde que faz **scraping HTML genuíno**. SISAB é JSF/PrimeFaces puro — o pipeline original AutoAPSFinancias dirige por Selenium devido aos AJAX em cascata. O gateway adota uma postura honesta: GET inicial → extração de `javax.faces.ViewState` → POST best-effort com todos os filtros em uma tacada → parse defensivo do `<table>` (mapeamento por texto do header, sobrevive a reordenação de coluna).
+  - DTO: `ibge`, `cnes`, `ine`, `statusValidacao` (`Aprovado`/`Reprovado` verbatim).
+  - **Trade-off documentado**: ambientes onde o SISAB exige cascata AJAX completa farão o CB tripar e retornarão **503 com mensagem clara** (`"Pode exigir interação JSF AJAX completa (Selenium sidecar)"`). Para deploys que precisam da extração robusta, o caminho é um sidecar Selenium em frente deste endpoint — a estrutura aqui é drop-in.
+  - Nenhum filtro pré-aplicado em `validacao`: a resposta sempre traz Aprovados **e** Reprovados, deixando o filtro de auditoria a cargo do consumidor.
+- **Quatro Circuit Breakers isolados** no domínio Saúde: `fnsScraperCB`, `eGestorScraperCB`, `cnesScraperCB` (timeout 20s — N+1 chamadas por equipe), `sisabScraperCB` (timeout 30s — round-trip JSF). Falha de um upstream nunca contamina a saúde percebida dos demais.
+- **Cache key composto no CNES**: `'cnes-' + cnesBase + '-' + ibge`, refletindo a chave real do upstream — evita servir profissionais de um município errado caso dois usem códigos CNES coincidentes.
+
+#### 🔍 O Auditor Automático (Rotas Mágicas)
+
+A peça que transforma os quatro endpoints atômicos da Saúde em **inteligência acionável**: uma única chamada, três fontes cruzadas em paralelo, e o gateway aponta com nome e sobrenome quem fez o município perder o repasse federal daquela competência.
+
+**O problema que resolve.** Quando o e-Gestor reporta uma equipe suspensa por motivo de produção, a pergunta que vale dinheiro não é *"qual equipe?"* — é *"qual médico ou enfermeiro daquela equipe não enviou produção pro SISAB?"*. Hoje, descobrir isso exige abrir três portais governamentais em três abas diferentes, fazer cross-reference manual de INE com CNES, e depois cruzar com a lista de validação do SISAB. Horas de trabalho de auditor por município. Por mês.
+
+**A rota mágica**: `GET /api/v1/saude/auditoria/inadimplencia?ibge={ibge}&cnes={cnes}&competencia={yyyy-MM}`.
+
+```bash
+# Auditoria completa de um estabelecimento específico em fevereiro/2024
+curl "http://localhost:8080/api/v1/saude/auditoria/inadimplencia?ibge=292870&cnes=2469776&competencia=2024-02"
+```
+
+```json
+[
+  {
+    "ineEquipe": "123456",
+    "statusRepasse": "SUSPENSO",
+    "motivoSuspensao": "EQUIPE SEM ENVIO DE PRODUCAO APROVADA NO SISAB",
+    "cnesUnidade": "2469776",
+    "profissionaisInadimplentes": [
+      "MARIA DA SILVA",
+      "JOÃO CARLOS PEREIRA",
+      "ANA CAROLINA SOUZA"
+    ]
+  }
+]
+```
+
+**Como o cruzamento funciona** (executado em paralelo, 3 chamadas concorrentes em Virtual Threads):
+
+1. **e-Gestor** entrega as equipes do município com `statusSuspensao` e motivo. O auditor mantém apenas as suspensas cujo motivo contém *"produção"* ou *"envio"* — a assinatura financeira de gap de validação no SISAB. Filtro acento-insensitive (cobre `"PRODUCAO"`, `"PRODUÇÃO"`, `"ENVIO NÃO REALIZADO"` etc.).
+2. **CNES** entrega os profissionais cadastrados naquele estabelecimento, agrupados por **INE canônico** (numérico, sem zeros à esquerda) — chave estável para o cruzamento entre os três portais que cada um normaliza o INE de um jeito.
+3. **SISAB** entrega as validações da competência. O auditor reduz para um `Set` de *INEs Aprovados* no CNES requisitado. Ausência neste conjunto é o sinal **inequívoco** de inadimplência.
+
+**O veredito** sai por equipe que satisfaz os três critérios simultâneos: (a) suspensa por produção no e-Gestor, (b) presente no CNES requisitado, (c) INE **não-Aprovado** no SISAB. Para cada veredito, a lista de profissionais vem direto da CNES — a *actionable list* que vai pro gestor.
+
+**Tolerância e honestidade**: quando o motivo da suspensão **não** é de produção (ex: `"FALTA DE COMPOSIÇÃO MÍNIMA"`), o auditor não devolve veredito — outra ferramenta resolve. Quando a equipe está suspensa por produção mas o SISAB **tem** Aprovado para ela, `profissionaisInadimplentes` vem **vazio** — sinal de que a causa real está em outro lugar (talvez o CNES esteja desatualizado e quem realmente produziu não está mais cadastrado). Nada é fabricado.
+
+**Performance**: as três chamadas downstream (e-Gestor, CNES, SISAB) já são cacheadas em Redis por 15 dias dentro do namespace `saude`. Numa cache warm, a auditoria responde em **~1 ms** — o cruzamento é puro `HashMap`/`HashSet` em memória. A primeira chamada paga o custo dos três portais em paralelo (limitado pelo mais lento), todas as subsequentes na mesma janela são essencialmente gratuitas.
+
+### 📊 Avaliação de Mercado & Price Gap
+
+Cascata de scrapers paralelos: **OLX + MobiAuto** (executados concorrentemente em Virtual Threads), com cruzamento contra **FIPE** e **Placa**.
+
+- DTO composto: `placa`, `dadosVeiculo` (resposta completa do módulo Placa, com chassi mascarado), `referenciaFipe` (cotação FIPE — opcional), `mercado` (`precoMedio`, `menorPreco`, `maiorPreco`, `quantidadeAnunciosEncontrados`, `linksReferencia`), `scoreAvaliacao`.
+- **Web Scraping em tempo real**: o gateway compõe a URL de busca de cada marketplace (slug normalizado de marca/modelo + ano), faz `GET` HTML via Jsoup e extrai os preços anunciados na primeira página. Marketplaces atualmente cobertos: **OLX** e **MobiAuto** — ambos com URLs e templates configuráveis em `application.yml`, override sem deploy.
+- **Fan-out paralelo em Virtual Threads**: cada scraper roda numa virtual thread isolada (`Executors.newVirtualThreadPerTaskExecutor()`); o tempo de parede da resposta acompanha o scraper mais lento, não a soma — JEP 444 comprovando seu valor em I/O-bound real.
+- **Resiliência da raspagem**: cada scraper tem seu próprio Circuit Breaker (`olxScraperCB`, `mobiAutoScraperCB`). Quando um marketplace muda o HTML e o seletor para de casar, a raspagem falha, o CB conta a falha, a cascata segue com os scrapers restantes e a média é computada sobre o que sobrou. **Defensivo por design** — o gateway nunca cai por mudança no DOM de terceiro.
+- **Parsing financeiro endurecido**: extrator regex de BRL (`R$ 45.000,00`) com filtros heurísticos (descarta valores < R$ 1.000 — ruído de "frete grátis acima de", "membro premium R$ 9,90" etc.). Cálculos em `BigDecimal` (sem drift de ponto flutuante) e arredondamento `HALF_UP` na média.
+- **Score com tolerância de ±5%** sobre o preço FIPE: `Acima da FIPE` (>105%), `Em linha com a FIPE` (95–105%), `Abaixo da FIPE` (<95%). Quando FIPE ou mercado estão indisponíveis, o score reflete explicitamente (`FIPE não fornecida (informe codigoFipe)`, `Sem dados de mercado disponíveis`).
+- **A avaliação por placa descobre automaticamente o Código FIPE do veículo (através do scraper integrado) cruzando o valor com o mercado em tempo real.** Quando a cascata do módulo Placa resolve via `PlacaFipeScraperClient`, o `PlacaResponse.codigoFipe` já vem populado e o `AvaliacaoService` enxerga o campo, dispara o `FipeService.findPreco` automaticamente e devolve a `referenciaFipe` na mesma resposta — **sem o caller ter que fornecer o código FIPE manualmente**. Quando o caller passa `?codigoFipe=` explicitamente, o valor do caller tem precedência (pode conhecer melhor uma variante de ano-modelo). Quando nenhum dos dois publica o código (cascata caiu em WDApi/Keplaca e o caller não informou), a referência FIPE é omitida e o score reflete — comportamento honesto, sem fabricar dados.
+- **Paralelismo total no `composeAvaliacao`**: a chamada FIPE (quando o código existe) e o fan-out de scrapers de mercado disparam concorrentemente no **mesmo `Executors.newVirtualThreadPerTaskExecutor()`** — sem aninhamento de pools. Wall-time ≈ `max(FIPE, scraper mais lento)`, não a soma. Em cache warm de Placa+FIPE, a auditoria responde basicamente no tempo do scraper mais lento.
+- **Privacidade preservada**: o chassi em `dadosVeiculo` permanece mascarado conforme contrato do módulo Placa. Avaliação é uma camada de composição — não bypassa políticas de privacidade dos módulos abaixo.
+- Sem cache no nível do composto: os módulos Placa (365d) e FIPE (15d) cacheiam separadamente; preços de mercado são, por natureza, voláteis e devem refletir o momento.
+
+#### Avaliação Manual (Livre de Tokens)
+
+A rota `GET /api/v1/avaliacao/manual` desacopla a inteligência de mercado da consulta de placa: pula totalmente o `PlacaService` e vai direto à FIPE (opcional) e aos scrapers. **Use quando**:
+
+- você já sabe `marca`, `modelo` e `ano` (ex: avaliação de anúncio prestes a ser publicado);
+- os provedores de placa (WDApi/Keplaca) estão bloqueados, sem credencial ou fora do ar;
+- você quer eliminar uma chamada externa que não agregaria informação ao caso de uso.
+
+Garantias mantidas: scraping paralelo em Virtual Threads, Circuit Breaker isolado por marketplace, parsing financeiro `BigDecimal` com filtros heurísticos, score com banda ±5% quando o `codigoFipe` é fornecido. Na resposta, `placa` e `dadosVeiculo` chegam `null` — sinalização explícita de que a identificação foi pulada.
+
 ### Catálogo de Bancos & ISPB
 
 Cascata: **BrasilAPI → Registro local in-memory (BACEN dump)**.
@@ -242,6 +354,208 @@ curl http://localhost:8080/api/v1/fipe/preco/005340-0/32000
 }
 ```
 
+### Placa — exemplos
+
+```bash
+# Padrão Mercosul (case-insensitive)
+curl http://localhost:8080/api/v1/placa/abc1d23
+
+# Padrão antigo
+curl http://localhost:8080/api/v1/placa/ABC1234
+```
+
+```json
+{
+  "placa": "ABC1D23",
+  "marca": "VOLKSWAGEN",
+  "modelo": "GOL 1.0 FLEX",
+  "anoFabricacao": 2010,
+  "anoModelo": 2011,
+  "chassi": "***3456",
+  "municipio": "Guarulhos",
+  "uf": "SP",
+  "codigoFipe": "005340-0"
+}
+```
+
+> `codigoFipe` é `null` quando o provedor que resolveu a cascata foi WDApi ou Keplaca. Vem populado quando o PlacaFipe scraper resolve — alimentando direto o módulo Avaliação sem exigir o código manualmente.
+
+### Saúde Pública (APS) — exemplos
+
+```bash
+# Repasses FNS de Vitória da Conquista (BA) em fevereiro/2024
+curl "http://localhost:8080/api/v1/saude/fns/292870?competencia=2024-02"
+
+# Equipes APS detalhadas via e-Gestor para o mesmo município/competência
+curl "http://localhost:8080/api/v1/saude/egestor/292870?competencia=2024-02"
+```
+
+Resposta FNS (lista — uma linha por bloco/ação):
+
+```json
+[
+  {
+    "codigoIbge": "292870",
+    "competencia": "2024-02",
+    "bloco": "ATENCAO PRIMARIA",
+    "valorTotal": 487320.50
+  },
+  {
+    "codigoIbge": "292870",
+    "competencia": "2024-02",
+    "bloco": "VIGILANCIA EM SAUDE",
+    "valorTotal": 92410.00
+  }
+]
+```
+
+Resposta e-Gestor (lista — uma linha por equipe):
+
+```json
+[
+  {
+    "ine": "0000123456",
+    "tipoEquipe": "ESF",
+    "valorCusteio": 32850.00,
+    "statusSuspensao": "NÃO SUSPENSO"
+  },
+  {
+    "ine": "0000789012",
+    "tipoEquipe": "ESB",
+    "valorCusteio": 0.00,
+    "statusSuspensao": "EQUIPE SUSPENSA POR DESCUMPRIMENTO DE COMPOSICAO MINIMA"
+  }
+]
+```
+
+### Saúde Pública — Estrutura (CNES e SISAB) — exemplos
+
+```bash
+# Profissionais cadastrados num estabelecimento (ibge é obrigatório)
+curl "http://localhost:8080/api/v1/saude/cnes/2469776/profissionais?ibge=292870"
+
+# Validação da produção SISAB para o município numa competência
+curl "http://localhost:8080/api/v1/saude/sisab/292870/producao?competencia=2024-02"
+```
+
+Resposta CNES (lista — uma linha por profissional):
+
+```json
+[
+  {
+    "cnesDaUnidade": "2469776",
+    "ineEquipe": "0000123456",
+    "nome": "MARIA DA SILVA",
+    "cns": "700000000000000",
+    "cbo": "225125",
+    "cargaHoraria": 40,
+    "dataEntrada": "01/03/2023"
+  }
+]
+```
+
+Resposta SISAB (lista — uma linha por equipe que enviou produção):
+
+```json
+[
+  {
+    "ibge": "292870",
+    "cnes": "2469776",
+    "ine": "0000123456",
+    "statusValidacao": "Aprovado"
+  },
+  {
+    "ibge": "292870",
+    "cnes": "2469881",
+    "ine": "0000789012",
+    "statusValidacao": "Reprovado"
+  }
+]
+```
+
+### Avaliação de Mercado — exemplos
+
+```bash
+# Avaliação simples (sem FIPE — score retorna "FIPE não fornecida")
+curl http://localhost:8080/api/v1/avaliacao/placa/ABC1D23
+
+# Avaliação completa cruzando FIPE
+curl "http://localhost:8080/api/v1/avaliacao/placa/ABC1D23?codigoFipe=005340-0"
+```
+
+```json
+{
+  "placa": "ABC1D23",
+  "dadosVeiculo": {
+    "placa": "ABC1D23",
+    "marca": "VOLKSWAGEN",
+    "modelo": "GOL 1.0 FLEX",
+    "anoFabricacao": 2010,
+    "anoModelo": 2011,
+    "chassi": "***3456",
+    "municipio": "Guarulhos",
+    "uf": "SP"
+  },
+  "referenciaFipe": {
+    "codigoFipe": "005340-0",
+    "marca": "Volkswagen",
+    "modelo": "GOL 1.0 FLEX",
+    "anoModelo": 2011,
+    "combustivel": "Gasolina",
+    "preco": 32500.00,
+    "mesReferencia": "março de 2026"
+  },
+  "mercado": {
+    "precoMedio": 34850.00,
+    "menorPreco": 28900.00,
+    "maiorPreco": 41200.00,
+    "quantidadeAnunciosEncontrados": 27,
+    "linksReferencia": [
+      "https://www.olx.com.br/autos-e-pecas/carros-vans-e-utilitarios/volkswagen/gol-1-0-flex/ano-2011",
+      "https://www.mobiauto.com.br/comprar/volkswagen/gol-1-0-flex/2011"
+    ]
+  },
+  "scoreAvaliacao": "Em linha com a FIPE"
+}
+```
+
+### Avaliação Manual — exemplos (livre de tokens de placa)
+
+```bash
+# Avaliação direta sem placa, FIPE incluída
+curl "http://localhost:8080/api/v1/avaliacao/manual?marca=Volkswagen&modelo=Gol+1.0+Flex&ano=2011&codigoFipe=005340-0"
+
+# Avaliação direta sem placa e sem FIPE — só scraping de mercado
+curl "http://localhost:8080/api/v1/avaliacao/manual?marca=Fiat&modelo=Uno+Mille&ano=2013"
+```
+
+```json
+{
+  "placa": null,
+  "dadosVeiculo": null,
+  "referenciaFipe": {
+    "codigoFipe": "005340-0",
+    "marca": "Volkswagen",
+    "modelo": "GOL 1.0 FLEX",
+    "anoModelo": 2011,
+    "combustivel": "Gasolina",
+    "preco": 32500.00,
+    "mesReferencia": "março de 2026"
+  },
+  "mercado": {
+    "precoMedio": 34850.00,
+    "menorPreco": 28900.00,
+    "maiorPreco": 41200.00,
+    "quantidadeAnunciosEncontrados": 27,
+    "linksReferencia": [
+      "https://www.olx.com.br/autos-e-pecas/carros-vans-e-utilitarios/volkswagen/gol-1-0-flex/ano-2011",
+      "https://www.mobiauto.com.br/comprar/volkswagen/gol-1-0-flex/2011"
+    ]
+  },
+  "scoreAvaliacao": "Em linha com a FIPE"
+}
+```
+
 ### Bancos — exemplos
 
 ```bash
@@ -320,6 +634,14 @@ curl http://localhost:8080/api/v1/taxas/ipca
 | `GET` | `/api/v1/bancos` | Catálogo completo de instituições financeiras (ISPB + COMPE). |
 | `GET` | `/api/v1/bancos/{codigo}` | Instituição por código COMPE (1 a 3 dígitos, zero-pad opcional). |
 | `GET` | `/api/v1/fipe/preco/{codigoFipe}/{anoModelo}` | Cotação FIPE de veículo (padrão `000000-0` + ano `yyyy` ou `32000` para Zero KM). |
+| `GET` | `/api/v1/placa/{placa}` | Identificação de veículo por placa (padrão antigo `ABC1234` ou Mercosul `ABC1D23`); chassi mascarado. |
+| `GET` | `/api/v1/avaliacao/placa/{placa}` | Avaliação cruzada placa + FIPE + mercado real (scraping em tempo real OLX/MobiAuto). Aceita `?codigoFipe=000000-0` opcional. |
+| `GET` | `/api/v1/avaliacao/manual` | Avaliação manual livre de tokens de placa — direto FIPE + mercado. Params: `marca`, `modelo`, `ano` (obrigatórios), `codigoFipe` (opcional). |
+| `GET` | `/api/v1/saude/fns/{ibge}` | Repasses do Fundo Nacional de Saúde para o município numa competência. Params: `competencia=yyyy-MM` (obrigatório). |
+| `GET` | `/api/v1/saude/egestor/{ibge}` | Equipes APS detalhadas (INE, tipo, custeio, status de suspensão) reportadas pelo e-Gestor. Params: `competencia=yyyy-MM` (obrigatório). |
+| `GET` | `/api/v1/saude/cnes/{cnesBase}/profissionais` | Profissionais cadastrados num estabelecimento CNES (todas as equipes). Params: `ibge` (obrigatório — chave composta upstream). |
+| `GET` | `/api/v1/saude/sisab/{ibge}/producao` | Validação SISAB (Aprovado/Reprovado) por equipe (CNES+INE) numa competência. Params: `competencia=yyyy-MM` (obrigatório). |
+| `GET` | `/api/v1/saude/auditoria/inadimplencia` | **Rota mágica** — cruza e-Gestor + CNES + SISAB e aponta os profissionais sem produção que causaram a suspensão de repasse. Params: `ibge`, `cnes`, `competencia=yyyy-MM` (todos obrigatórios). |
 | `GET` | `/swagger-ui.html` | Documentação interativa da API. |
 | `GET` | `/v3/api-docs` | Schema OpenAPI 3 (JSON). |
 | `GET` | `/actuator/health` | Liveness/Readiness probes. |
@@ -332,7 +654,82 @@ curl http://localhost:8080/api/v1/taxas/ipca
 | `SPRING_DATA_REDIS_HOST` | `localhost` | Host do Redis. |
 | `SPRING_DATA_REDIS_PORT` | `6379` | Porta do Redis. |
 | `GATEWAY_RATE_LIMIT_ENABLED` | `false` | **Ative apenas no Playground público** (5 req/min/IP). Em deploy corporativo, mantenha desativado para throughput ilimitado. |
+| `GATEWAY_FLARESOLVERR_URL` | *(vazio)* | URL do sidecar FlareSolverr (ex: `http://flaresolverr:8191`). **Obrigatório para as rotas `/api/v1/saude/*`** (CNES, e-Gestor, SISAB) e habilita o fallback de Web Scraping de placas (`placafipe.com`). Sem esta var, as rotas Saúde devolvem 503 com mensagem clara; o resto do gateway funciona normalmente. Veja a seção **Deploy Produtivo & Bypass Anti-Bot** abaixo. |
 | `SERVER_PORT` | `8080` | Porta HTTP. |
+
+---
+
+## 🚀 Deploy Produtivo & Bypass Anti-Bot
+
+Em produção, parte das rotas do gateway atravessa **WAFs governamentais** (F5 BIG-IP em `cnes.datasus.gov.br`, `relatorioaps-prd.saude.gov.br`, `sisab.saude.gov.br`) e **Cloudflare** (`placafipe.com`). Esses fronts rejeitam consistentemente requisições originadas de processos Java — mesmo com handshakes meticulosos de cookies, headers `Sec-Fetch-*` e ViewState JSF preservado. Validamos todas as alternativas; nenhuma combinação puramente Java passa.
+
+A solução adotada é o **padrão "Sidecar Cirúrgico"** com [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) — um pequeno serviço auxiliar que dirige um Chromium headless e devolve o body resolvido após o desafio. **Não embarcamos Selenium no container Java**: o gateway continua leve (~250 MB), e o peso de um browser real (~600 MB) fica isolado num container separado, ativado apenas onde necessário.
+
+### Arquitetura híbrida (FlareSolverr é opcional)
+
+```
+                        ┌──────────────────────────────────────┐
+        cliente ────────▶          api (Java/Spring)           │
+                        │                                      │
+                        │  /api/v1/cep/*       ─────────────┐  │
+                        │  /api/v1/cnpj/*                   │  │
+                        │  /api/v1/calendario/*             │  │
+                        │  /api/v1/taxas/*                  │  │
+                        │  /api/v1/rastreio/*               ├──┼──▶ APIs públicas
+                        │  /api/v1/bancos/*                 │  │    (BrasilAPI, ViaCEP, …)
+                        │  /api/v1/fipe/*                   │  │
+                        │  /api/v1/saude/fns/*              │  │
+                        │  /api/v1/avaliacao/*  ─────────── ┘  │
+                        │  /api/v1/placa/*       (cascata pode │
+                        │                         cair no ↓)   │
+                        │                                      │
+                        │  /api/v1/saude/cnes/*    ─┐          │
+                        │  /api/v1/saude/egestor/* ─┤          │
+                        │  /api/v1/saude/sisab/*   ─┤          │
+                        │  PlacaFipe (fallback)    ─┴───┐      │
+                        └─────────────────────────┬─────┴──────┘
+                                                  │
+                                                  ▼
+                                         ┌──────────────────┐
+                                         │   flaresolverr   │
+                                         │ (Chromium headless)│
+                                         └────────┬─────────┘
+                                                  ▼
+                                          gov.br WAF / Cloudflare
+```
+
+**Sem FlareSolverr** (deploy "leve"):
+- Funcionam normalmente: CEP, CNPJ, calendário, taxas, rastreio, bancos, FIPE, FNS, avaliação OLX/MobiAuto, placa (WDApi/Keplaca quando há tokens).
+- Devolvem **503** com mensagem clara: rotas CNES, e-Gestor, SISAB e o fallback PlacaFipe da cascata de placas. A mensagem é literal: *"Esta rota exige a ativação do sidecar FlareSolverr devido ao WAF governamental."* — operadores entendem o caminho imediatamente.
+
+**Com FlareSolverr** (deploy "completo"):
+- Todas as rotas funcionam, incluindo as 3 do auditor APS (CNES, e-Gestor, SISAB) e a rota mágica `/api/v1/saude/auditoria/inadimplencia`.
+- A cascata de placas cai limpamente no PlacaFipe scraper sem 403 do Cloudflare.
+- Latência adicional: ~5-10s na primeira chamada (resolve o desafio); cache Redis de 15-365 dias absorve para ~1 ms nas seguintes.
+
+### Como ativar
+
+No `docker-compose.yml` da raiz, descomente as três marcações em conjunto:
+
+1. A variável `GATEWAY_FLARESOLVERR_URL: http://flaresolverr:8191` no serviço `api`.
+2. A dependência `flaresolverr: condition: service_started` no `depends_on` do `api`.
+3. O bloco completo do serviço `flaresolverr` (imagem `ghcr.io/flaresolverr/flaresolverr:latest`, porta `8191:8191`).
+
+Suba normalmente:
+
+```bash
+docker compose up -d --build
+```
+
+Pronto — as rotas Saúde respondem 200 ao invés de 503, e o gateway resolve `placafipe.com` sem cair em Cloudflare.
+
+### Por que opcional?
+
+Nem todo deploy precisa das rotas Saúde. Empresas que consomem só CEP+CNPJ+FIPE não querem rodar Chromium em produção. O design respeita isso: o sidecar é uma **escolha consciente do operador**, não um custo embutido.
+
+### Anatomia do invoker
+
+Toda chamada para o FlareSolverr passa por uma classe única — `config/FlareSolverrInvoker.java` — que faz `POST /v1` com `{"cmd": "request.get|post", "url": "...", "cookies": [...], "postData": "..."}` e extrai `solution.response`. Os 4 clients que usam (`PlacaFipeScraperClient`, `CnesWebClient`, `EGestorWebClient`, `SisabWebClient`) compartilham essa única implementação — zero duplicação de envelope JSON, single point of evolution se a API do FlareSolverr mudar.
 
 ---
 

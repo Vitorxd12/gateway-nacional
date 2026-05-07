@@ -104,7 +104,7 @@ Use o padrão **Given / When / Then** com comentários explícitos delimitando o
 O projeto adota estritamente *Package by Feature*. Cada domínio é um pacote raiz autocontido:
 
 ```
-br.com.cernebr.gateway_nacional.{cep,cnpj,calendario,taxas,rastreio,bancos,fipe}
+br.com.cernebr.gateway_nacional.{cep,cnpj,calendario,taxas,rastreio,bancos,fipe,placa,avaliacao,saude}
                                   └── client/      (clients HTTP + Anti-Corruption Layer)
                                   └── controller/  (endpoints REST)
                                   └── dto/         (DTO unificado do domínio)
@@ -147,6 +147,18 @@ private record ReceitaWsPayload(
 Quando o ReceitaWS renomear `nome` para `razao_social` na próxima versão da API, **somente o Record `ReceitaWsPayload` muda**. O `CnpjResponse`, o `CnpjService`, o controller, os consumidores externos — todos permanecem inalterados.
 
 **Pull Requests que vazam o schema do upstream para fora do client serão recusados.**
+
+#### ACL para Web Scraping — index label→value
+
+Quando o upstream **não é JSON** mas HTML scraped (ex: `placa/client/PlacaFipeScraperClient`, `saude/client/SisabWebClient`), o ACL muda de forma mas mantém o princípio: **nenhum seletor CSS específico vaza para fora do client**. O padrão idiomático no projeto é:
+
+1. Varrer o documento (Jsoup) montando um `Map<labelNormalizado, valor>` a partir de toda estrutura conhecida de label-value (`<tr>th/td`, `<dl>dt/dd`, `<table>td/td`).
+2. Normalizar a chave: `Normalizer.NFD` + remover diacríticos + lowercase + collapse de espaços.
+3. Fazer lookup pelos rótulos canônicos com **lista de aliases** — `pickFirst(map, "marca")`, `pickFirst(map, "ano fabricacao", "ano de fabricacao")`.
+
+Quando o site mudar a estrutura HTML, a mudança fica isolada no método de varredura (etapa 1). Quando renomearem um label, basta adicionar um alias na chamada do `pickFirst`. Nenhum service nem controller percebe.
+
+Cascatas com scrapers como fallback gratuito (ex: `WDApi → Keplaca → PlacaFipe`) são bem-vindas — eles convivem com APIs pagas dentro da mesma `List<ClientProvider>` desde que respeitem o contrato (`@CircuitBreaker` próprio, `ResourceUnavailableException` no caminho de erro, mascaramento de PII como `ChassiMask`).
 
 ### Tratamento de Exceções nas Cascatas
 
