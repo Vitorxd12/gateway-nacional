@@ -31,3 +31,6 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Local research / reference projects (not part of the gateway build) ###
+AutoAPSFinancias/

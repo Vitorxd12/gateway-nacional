@@ -28,11 +28,44 @@ services:
     environment:
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: "6379"
+      # ── FlareSolverr (anti-bot sidecar) ───────────────────────────────────
+      # Descomente a linha abaixo EM CONJUNTO com o serviço `flaresolverr`
+      # mais adiante neste arquivo. Sem isso, as rotas /api/v1/saude/*
+      # (CNES, e-Gestor, SISAB) e o fallback PlacaFipe respondem 503 com
+      # mensagem clara de "exige FlareSolverr".
+      # GATEWAY_FLARESOLVERR_URL: http://flaresolverr:8191
     depends_on:
       redis:
         condition: service_healthy
+      # Descomente esta dependência junto com o bloco do flaresolverr:
+      # flaresolverr:
+      #   condition: service_started
     networks:
       - gateway-net
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # FlareSolverr — Sidecar OPCIONAL para bypass de WAF / Cloudflare.
+  # ─────────────────────────────────────────────────────────────────────────
+  # Descomente o bloco completo abaixo (incluindo `GATEWAY_FLARESOLVERR_URL`
+  # no serviço `api` e a dependência) quando precisar de:
+  #   • Rotas Saúde (CNES / e-Gestor / SISAB) — F5 BIG-IP do gov.br;
+  #   • Fallback PlacaFipe (placafipe.com) — Cloudflare.
+  # Sem este sidecar, o gateway opera normalmente para todas as outras
+  # rotas (CEP, CNPJ, FIPE, calendário, taxas, rastreio, bancos, FNS,
+  # avaliação OLX/MobiAuto), e as rotas Saúde devolvem 503 com mensagem
+  # explícita orientando o operador a ativar o FlareSolverr.
+  #
+  # flaresolverr:
+  #   image: ghcr.io/flaresolverr/flaresolverr:latest
+  #   container_name: gateway-nacional-flaresolverr
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8191:8191"
+  #   environment:
+  #     LOG_LEVEL: info
+  #     TZ: America/Sao_Paulo
+  #   networks:
+  #     - gateway-net
 
 networks:
   gateway-net:
