@@ -20,11 +20,34 @@ from __future__ import annotations
 import logging
 import os
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel
 from selenium.common.exceptions import TimeoutException
 
 from sisab_scraper import scrape_sisab
+
+
+# Two-digit IBGE UF prefix → official UF acronym. The UF code (cód. IBGE
+# de UF) is canonical and stable; the SISAB form expects the acronym in
+# its UF dropdown, so we project the prefix here. Letting the Java client
+# pass only `ibge` keeps the public sidecar contract minimal — the gateway
+# already keeps its own `IbgeUfLookup` table for symmetry on the JVM side.
+_IBGE_UF_PREFIX: dict[str, str] = {
+    "11": "RO", "12": "AC", "13": "AM", "14": "RR", "15": "PA", "16": "AP", "17": "TO",
+    "21": "MA", "22": "PI", "23": "CE", "24": "RN", "25": "PB", "26": "PE", "27": "AL",
+    "28": "SE", "29": "BA",
+    "31": "MG", "32": "ES", "33": "RJ", "35": "SP",
+    "41": "PR", "42": "SC", "43": "RS",
+    "50": "MS", "51": "MT", "52": "GO", "53": "DF",
+}
+
+
+def _uf_from_ibge(ibge: str) -> str | None:
+    """Extracts the two-letter UF acronym from an IBGE municipality code."""
+    digits = "".join(ch for ch in (ibge or "") if ch.isdigit())
+    if len(digits) < 2:
+        return None
+    return _IBGE_UF_PREFIX.get(digits[:2])
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -43,36 +66,9 @@ app = FastAPI(
 )
 
 
-class ScrapeRequest(BaseModel):
-    """Request payload — mirrors the Java DTO on the gateway side."""
-
-    uf: str = Field(min_length=2, max_length=2, description="Two-letter state code (e.g. BA).")
-    ibge: str = Field(min_length=6, max_length=7, description="Six- or seven-digit IBGE code.")
-    competencia: str = Field(
-        min_length=7,
-        max_length=7,
-        description='Competency as "yyyy-MM" (preferred) or "MM/AAAA".',
-    )
-
-
-class ScrapeRow(BaseModel):
-    """One row of the SISAB validation table — keys mirror the upstream HTML."""
-
-    REGIAO: str | None = None
-    UF: str | None = None
-    IBGE: str | None = None
-    MUNICIPIO: str | None = None
-    CNES: str | None = None
-    INE: str | None = None
-    VALIDACAO: str | None = None
-    TOTAL: int | None = None
-
-    # Permite tail columns que SISAB às vezes adiciona (envio prazo, etc.) sem
-    # quebrar a serialização — Pydantic v2 silencia extras com este config.
-    model_config = {"extra": "allow"}
-
-
 class ScrapeResponse(BaseModel):
+    """Wire-shape consumed by the Java {@code SisabWebClient.SidecarResponse}."""
+
     rows: list[dict]
     competencia: str
     empty: bool
@@ -84,18 +80,34 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/scrape", response_model=ScrapeResponse)
-def scrape(req: ScrapeRequest) -> ScrapeResponse:
+@app.get("/scrape", response_model=ScrapeResponse)
+def scrape(
+    ibge: str = Query(min_length=6, max_length=7, description="IBGE municipality code (6 or 7 digits)."),
+    competencia: str = Query(min_length=7, max_length=7, description='Competency as "yyyy-MM" or "MM/AAAA".'),
+) -> ScrapeResponse:
     """Run the headless scrape.
 
-    Latency: cold runs are 30–90 s (SISAB is slow under headless Chromium
+    The endpoint exposes a GET with query parameters so the gateway can
+    invoke it as a standard upstream — the body of an HTTP/1.1 request is
+    ambiguous to cache layers and CDNs, while query params survive any
+    HTTP intermediary cleanly. The UF is derived from the IBGE prefix
+    so the public contract stays tight (two params instead of three).
+
+    Latency: cold runs are 10–90 s (SISAB is slow under headless Chromium
     plus the cascade of jQuery.active waits). The Java caller has its own
-    Resilience4j ``timelimiter.sisabSidecarCB`` configured to 120 s — keep
+    Resilience4j ``timelimiter.sisabScraperCB`` configured to 120 s — keep
     that in sync if you tune anything here.
     """
-    logger.info("Scrape request: uf=%s ibge=%s competencia=%s", req.uf, req.ibge, req.competencia)
+    uf = _uf_from_ibge(ibge)
+    if uf is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"IBGE inválido para derivação de UF: {ibge!r} (precisa de prefixo conhecido).",
+        )
+
+    logger.info("Scrape request: uf=%s ibge=%s competencia=%s", uf, ibge, competencia)
     try:
-        result = scrape_sisab(uf=req.uf, ibge=req.ibge, competencia=req.competencia)
+        result = scrape_sisab(uf=uf, ibge=ibge, competencia=competencia)
     except ValueError as exc:
         # Bad input — do not punish the caller's circuit breaker.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -110,7 +122,7 @@ def scrape(req: ScrapeRequest) -> ScrapeResponse:
 
     logger.info(
         "Scrape OK: ibge=%s comp=%s rows=%d empty=%s",
-        req.ibge, result.competencia, len(result.rows), result.empty,
+        ibge, result.competencia, len(result.rows), result.empty,
     )
     return ScrapeResponse(
         rows=result.rows,
