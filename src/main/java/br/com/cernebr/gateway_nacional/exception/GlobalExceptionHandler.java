@@ -1,6 +1,8 @@
 package br.com.cernebr.gateway_nacional.exception;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -29,6 +31,7 @@ public class GlobalExceptionHandler {
 
     private static final URI TYPE_VALIDATION       = URI.create("https://api.gateway-nacional.com.br/errors/validation");
     private static final URI TYPE_RESOURCE_UNAVAIL = URI.create("https://api.gateway-nacional.com.br/errors/resource-unavailable");
+    private static final URI TYPE_RESOURCE_NOTFOUND = URI.create("https://api.gateway-nacional.com.br/errors/resource-not-found");
     private static final URI TYPE_INTERNAL         = URI.create("https://api.gateway-nacional.com.br/errors/internal");
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -85,6 +88,42 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest().body(problem);
     }
 
+    /**
+     * Handles bean-validation failures triggered by {@code @Validated} on
+     * controller method parameters (e.g., {@code @PathVariable @Pattern},
+     * {@code @RequestParam @NotBlank @Size}). Spring lobs these as
+     * {@link ConstraintViolationException} when the violation surfaces on
+     * a method argument rather than a {@code @RequestBody}; without an
+     * explicit handler, the catch-all maps them to a misleading 500.
+     *
+     * <p>Returning 400 with the offending field path and message keeps the
+     * contract symmetric with {@link MethodArgumentNotValidException}
+     * (which handles {@code @Valid @RequestBody}) and gives the consumer
+     * actionable feedback.</p>
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ProblemDetail> handleConstraintViolation(ConstraintViolationException ex,
+                                                                   HttpServletRequest request) {
+        List<Map<String, String>> fieldErrors = ex.getConstraintViolations().stream()
+                .map(this::toConstraintViolationPayload)
+                .toList();
+
+        log.warn("Constraint violation on {} {}: {} field(s) invalid",
+                request.getMethod(), request.getRequestURI(), fieldErrors.size());
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.BAD_REQUEST,
+                "A requisição contém parâmetros inválidos. Verifique os erros e tente novamente."
+        );
+        problem.setTitle("Requisição inválida");
+        problem.setType(TYPE_VALIDATION);
+        problem.setInstance(URI.create(request.getRequestURI()));
+        problem.setProperty("timestamp", OffsetDateTime.now());
+        problem.setProperty("errors", fieldErrors);
+
+        return ResponseEntity.badRequest().body(problem);
+    }
+
     @ExceptionHandler(ResourceUnavailableException.class)
     public ResponseEntity<ProblemDetail> handleResourceUnavailable(ResourceUnavailableException ex,
                                                                    HttpServletRequest request) {
@@ -120,6 +159,30 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(problem);
     }
 
+    @ExceptionHandler(ResourceNotFoundException.class)
+    public ResponseEntity<ProblemDetail> handleResourceNotFound(ResourceNotFoundException ex,
+                                                                HttpServletRequest request) {
+        log.info("Resource not found ({}): {} {} → {}",
+                ex.getResourceType(), request.getMethod(), request.getRequestURI(), ex.getMessage());
+
+        // Same propagation rule as the 503 handler: surface the specific
+        // message ("NCM 9999.99.99 não consta no catálogo Mercosul") so the
+        // consumer learns *what* is missing, not just that *something* is.
+        String detail = ex.getMessage();
+        if (detail == null || detail.isBlank()) {
+            detail = "Recurso não encontrado.";
+        }
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, detail);
+        problem.setTitle("Recurso não encontrado");
+        problem.setType(TYPE_RESOURCE_NOTFOUND);
+        problem.setInstance(URI.create(request.getRequestURI()));
+        problem.setProperty("timestamp", OffsetDateTime.now());
+        problem.setProperty("resourceType", ex.getResourceType());
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(problem);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ProblemDetail> handleUnexpected(Exception ex, HttpServletRequest request) {
         String traceId = newTraceId();
@@ -146,6 +209,23 @@ public class GlobalExceptionHandler {
                 "message", error.getDefaultMessage() != null
                         ? error.getDefaultMessage()
                         : "Valor inválido."
+        );
+    }
+
+    /**
+     * Maps a {@link ConstraintViolation} to the same {field, message} shape
+     * the other validation handlers emit. The "field" is taken from the
+     * leaf node of the property path (e.g., for "findByCodigo.codigo" we
+     * surface only "codigo" — the method name is server-side noise that
+     * leaks the controller signature unnecessarily).
+     */
+    private Map<String, String> toConstraintViolationPayload(ConstraintViolation<?> violation) {
+        String fullPath = violation.getPropertyPath().toString();
+        int lastDot = fullPath.lastIndexOf('.');
+        String leafField = lastDot >= 0 ? fullPath.substring(lastDot + 1) : fullPath;
+        return Map.of(
+                "field", leafField,
+                "message", violation.getMessage() != null ? violation.getMessage() : "Valor inválido."
         );
     }
 
