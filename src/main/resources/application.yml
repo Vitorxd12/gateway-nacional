@@ -34,13 +34,19 @@ gateway:
     enabled: false # Mantido desativado por padrão para uso corporativo (Self-Hosted). Para o Playground público, injetar env GATEWAY_RATE_LIMIT_ENABLED=true
   flaresolverr:
     # URL do sidecar FlareSolverr (https://github.com/FlareSolverr/FlareSolverr).
-    # OPCIONAL para o módulo Placa (fallback PlacaFipe). OBRIGATÓRIO para as
-    # rotas Saúde (CNES, e-Gestor, SISAB) — sem ele, essas rotas devolvem 503
-    # com "Esta rota exige a ativação do sidecar FlareSolverr...".
-    # Ative descomentando o serviço flaresolverr no docker-compose.yml e
-    # injetando GATEWAY_FLARESOLVERR_URL=http://flaresolverr:8191 no api.
-    url:
+    # OPCIONAL para o módulo Placa (fallback PlacaFipe). OBRIGATÓRIO para
+    # CNES, e-Gestor e FIPE-Oficial — sem ele, essas rotas devolvem 503 com
+    # "Esta rota exige a ativação do sidecar FlareSolverr...".
+    url: ${GATEWAY_FLARESOLVERR_URL:}
     max-timeout-ms: 60000
+  # ─────────────────────────────────────────────────────────────────────────
+  # Sidecar Python dedicado para SISAB Validação. Necessário porque a página
+  # JSF/Mojarra usa plugins Bootstrap Multiselect cujo estado só sincroniza
+  # via cliques reais no DOM — FlareSolverr v3 não expõe primitivas de
+  # interação JS (executeJS, click). Container provido em
+  # services/sisab-sidecar/ no docker-compose.
+  sisab-sidecar:
+    url: ${GATEWAY_SISAB_SIDECAR_URL:}
   # Base URLs por provedor — sobrescritas em test profile (WireMock) e
   # eventualmente em deploys que precisem apontar para mirrors internos.
   taxas:
@@ -110,15 +116,11 @@ gateway:
       base-url: https://cnes.datasus.gov.br
       user-agent: Mozilla/5.0 (compatible; GatewayNacional/1.0)
     sisab:
-      # SISAB depende do sidecar Python dedicado (Selenium + Chromium headless).
-      # A página JSF/Mojarra usa plugins Bootstrap Multiselect cujo estado só é
-      # sincronizado para o <select> via cliques reais no DOM — HTTP puro
-      # produz IndexOutOfBoundsException no backend. Sem este sidecar
-      # configurado, /api/v1/saude/sisab/* devolve 503 com mensagem clara.
-      sidecar-url: ${GATEWAY_SISAB_SIDECAR_URL:}
-      # Mantemos as base-url originais por completude — não são usadas pelo
-      # cliente atual (que delega 100% pro sidecar), mas servem como
-      # documentação canônica do upstream e ponto de extensão futura.
+      # SISAB depende do sidecar Python dedicado (Selenium + Chromium headless)
+      # configurado em `gateway.sisab-sidecar.url` na raiz deste arquivo.
+      # As propriedades abaixo são documentação canônica do upstream — não
+      # são usadas pelo cliente atual (delega 100% ao sidecar) mas ficam
+      # como ponto de extensão futura.
       base-url: https://sisab.saude.gov.br
       report-path: /paginas/acessoRestrito/relatorio/federal/envio/RelValidacao.xhtml
   avaliacao:
