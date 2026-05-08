@@ -72,6 +72,13 @@ gateway:
   bancos:
     brasilapi:
       base-url: https://brasilapi.com.br
+  cnae:
+    # Classificação Nacional de Atividades Econômicas — pareada com CNPJ.
+    # IBGE servicodados é a fonte canônica (publica a tabela CONCLA).
+    # Fallback é um JSON local bake-into-image em data/cnae_subclasses.json
+    # — não precisa de configuração externa.
+    ibge:
+      base-url: https://servicodados.ibge.gov.br
   ncm:
     # Nomenclatura Comum do Mercosul (NCM) — fundamental para emissão de
     # NF-e. Cascata BrasilAPI → Siscomex; cache de 30 dias.
@@ -248,6 +255,9 @@ resilience4j:
         baseConfig: default
       siscomexNcmCB:
         baseConfig: default
+      # CNAE providers (Classificação Nacional de Atividades Econômicas)
+      ibgeCnaeCB:
+        baseConfig: default
       # Placa providers
       wdApiPlacaCB:
         baseConfig: default
@@ -327,6 +337,9 @@ resilience4j:
       brasilApiNcmCB:
         baseConfig: default
       siscomexNcmCB:
+        baseConfig: default
+      # CNAE providers
+      ibgeCnaeCB:
         baseConfig: default
       # Placa providers
       wdApiPlacaCB:

@@ -43,6 +43,8 @@ public class CacheConfig {
     // entre virtualmente zerar tráfego upstream e não atrasar a propagação
     // de uma resolução nova além de uma janela aceitável.
     private static final Duration NCM_TTL = Duration.ofDays(30);
+    // CNAE (CONCLA) — atualizada raras vezes por ano; mesmo TTL da NCM.
+    private static final Duration CNAE_TTL = Duration.ofDays(30);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
@@ -53,6 +55,7 @@ public class CacheConfig {
     private static final String PLACAS_CACHE = "placas";
     private static final String SAUDE_CACHE = "saude";
     private static final String NCM_CACHE = "ncm";
+    private static final String CNAE_CACHE = "cnae";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -67,7 +70,8 @@ public class CacheConfig {
                 FIPE_CACHE, baseConfig().entryTtl(FIPE_TTL),
                 PLACAS_CACHE, baseConfig().entryTtl(PLACAS_TTL),
                 SAUDE_CACHE, baseConfig().entryTtl(SAUDE_TTL),
-                NCM_CACHE, baseConfig().entryTtl(NCM_TTL)
+                NCM_CACHE, baseConfig().entryTtl(NCM_TTL),
+                CNAE_CACHE, baseConfig().entryTtl(CNAE_TTL)
         );
 
         return RedisCacheManager.builder(connectionFactory)
