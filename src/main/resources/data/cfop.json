@@ -1,0 +1,82 @@
+[
+  {
+    "codigo": "1102",
+    "descricao": "Compra para comercialização",
+    "aplicacao": "Classificam-se neste código as compras de mercadorias a serem comercializadas. Também serão classificadas neste código as entradas de mercadorias em estabelecimento de cooperativa, recebidas de seus cooperados ou de estabelecimento de outra cooperativa."
+  },
+  {
+    "codigo": "1101",
+    "descricao": "Compra para industrialização ou produção rural",
+    "aplicacao": "Classificam-se neste código as compras de mercadorias a serem utilizadas em processo de industrialização ou produção rural. Também serão classificadas neste código as entradas de mercadorias em estabelecimento industrial ou produtor rural de cooperativa, recebidas de seus cooperados ou de estabelecimento de outra cooperativa."
+  },
+  {
+    "codigo": "1202",
+    "descricao": "Devolução de venda de mercadoria adquirida ou recebida de terceiros",
+    "aplicacao": "Classificam-se neste código as devoluções de vendas de mercadorias adquiridas ou recebidas de terceiros, cujas saídas tenham sido classificadas como Venda de mercadoria adquirida ou recebida de terceiros."
+  },
+  {
+    "codigo": "1556",
+    "descricao": "Compra de material para uso ou consumo",
+    "aplicacao": "Classificam-se neste código as compras de materiais destinados ao uso ou consumo do estabelecimento."
+  },
+  {
+    "codigo": "2102",
+    "descricao": "Compra para comercialização",
+    "aplicacao": "Classificam-se neste código as compras de mercadorias a serem comercializadas. Também serão classificadas neste código as entradas de mercadorias em estabelecimento de cooperativa, recebidas de seus cooperados ou de estabelecimento de outra cooperativa, em operações interestaduais."
+  },
+  {
+    "codigo": "3102",
+    "descricao": "Compra para comercialização",
+    "aplicacao": "Classificam-se neste código as compras de mercadorias importadas a serem comercializadas."
+  },
+  {
+    "codigo": "5101",
+    "descricao": "Venda de produção do estabelecimento",
+    "aplicacao": "Classificam-se neste código as vendas de produtos industrializados ou produzidos pelo próprio estabelecimento. Também serão classificadas neste código as vendas de mercadorias por estabelecimento industrial de cooperativa destinadas a seus cooperados ou a estabelecimento de outra cooperativa."
+  },
+  {
+    "codigo": "5102",
+    "descricao": "Venda de mercadoria adquirida ou recebida de terceiros",
+    "aplicacao": "Classificam-se neste código as vendas de mercadorias adquiridas ou recebidas de terceiros para industrialização ou comercialização, que não tenham sido objeto de qualquer processo industrial no estabelecimento. Também serão classificadas neste código as vendas de mercadorias por estabelecimento comercial de cooperativa destinadas a seus cooperados ou estabelecimento de outra cooperativa."
+  },
+  {
+    "codigo": "5405",
+    "descricao": "Venda de mercadoria adquirida ou recebida de terceiros em operação com mercadoria sujeita ao regime de substituição tributária, na condição de contribuinte substituído",
+    "aplicacao": "Classificam-se neste código as vendas de mercadorias adquiridas ou recebidas de terceiros, sujeitas ao regime de substituição tributária, na condição de contribuinte substituído."
+  },
+  {
+    "codigo": "5910",
+    "descricao": "Remessa em bonificação, doação ou brinde",
+    "aplicacao": "Classificam-se neste código as remessas de mercadorias a título de bonificação, doação ou brinde."
+  },
+  {
+    "codigo": "5915",
+    "descricao": "Remessa de mercadoria ou bem para conserto ou reparo",
+    "aplicacao": "Classificam-se neste código as remessas de mercadorias ou bens para conserto ou reparo."
+  },
+  {
+    "codigo": "5949",
+    "descricao": "Outra saída de mercadoria ou prestação de serviço não especificado",
+    "aplicacao": "Classificam-se neste código as outras saídas de mercadorias ou prestações de serviços que não tenham sido especificadas nos códigos anteriores."
+  },
+  {
+    "codigo": "6101",
+    "descricao": "Venda de produção do estabelecimento",
+    "aplicacao": "Classificam-se neste código as vendas de produtos industrializados ou de produção própria do estabelecimento, em operações interestaduais. Também serão classificadas neste código as vendas de mercadorias por estabelecimento industrial de cooperativa destinadas a seus cooperados ou a estabelecimento de outra cooperativa."
+  },
+  {
+    "codigo": "6102",
+    "descricao": "Venda de mercadoria adquirida ou recebida de terceiros",
+    "aplicacao": "Classificam-se neste código as vendas de mercadorias adquiridas ou recebidas de terceiros, em operações interestaduais, que não tenham sido objeto de qualquer processo industrial."
+  },
+  {
+    "codigo": "6405",
+    "descricao": "Venda de mercadoria adquirida ou recebida de terceiros sujeita ao regime de substituição tributária, na condição de contribuinte substituído",
+    "aplicacao": "Classificam-se neste código as vendas de mercadorias adquiridas ou recebidas de terceiros, em operações interestaduais, sujeitas ao regime de substituição tributária, na condição de contribuinte substituído."
+  },
+  {
+    "codigo": "7102",
+    "descricao": "Venda de mercadoria adquirida ou recebida de terceiros",
+    "aplicacao": "Classificam-se neste código as vendas de mercadorias adquiridas ou recebidas de terceiros, destinadas a destinatário no exterior."
+  }
+]
