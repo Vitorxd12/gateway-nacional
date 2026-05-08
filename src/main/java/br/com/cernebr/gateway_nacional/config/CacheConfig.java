@@ -38,6 +38,11 @@ public class CacheConfig {
     private static final Duration FIPE_TTL = Duration.ofDays(15);
     private static final Duration PLACAS_TTL = Duration.ofDays(365);
     private static final Duration SAUDE_TTL = Duration.ofDays(15);
+    // NCM (Nomenclatura Comum do Mercosul) — a tabela é atualizada algumas
+    // vezes por ano via resoluções da Camex; 30 dias é o ponto de equilíbrio
+    // entre virtualmente zerar tráfego upstream e não atrasar a propagação
+    // de uma resolução nova além de uma janela aceitável.
+    private static final Duration NCM_TTL = Duration.ofDays(30);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
@@ -47,6 +52,7 @@ public class CacheConfig {
     private static final String FIPE_CACHE = "fipe";
     private static final String PLACAS_CACHE = "placas";
     private static final String SAUDE_CACHE = "saude";
+    private static final String NCM_CACHE = "ncm";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -60,7 +66,8 @@ public class CacheConfig {
                 BANCOS_CACHE, baseConfig().entryTtl(BANCOS_TTL),
                 FIPE_CACHE, baseConfig().entryTtl(FIPE_TTL),
                 PLACAS_CACHE, baseConfig().entryTtl(PLACAS_TTL),
-                SAUDE_CACHE, baseConfig().entryTtl(SAUDE_TTL)
+                SAUDE_CACHE, baseConfig().entryTtl(SAUDE_TTL),
+                NCM_CACHE, baseConfig().entryTtl(NCM_TTL)
         );
 
         return RedisCacheManager.builder(connectionFactory)

@@ -72,6 +72,19 @@ gateway:
   bancos:
     brasilapi:
       base-url: https://brasilapi.com.br
+  ncm:
+    # Nomenclatura Comum do Mercosul (NCM) — fundamental para emissão de
+    # NF-e. Cascata BrasilAPI → Siscomex; cache de 30 dias.
+    brasilapi:
+      base-url: https://brasilapi.com.br
+    siscomex:
+      base-url: https://portalunico.siscomex.gov.br
+      # Path do recurso por código. Em 2026-05 confirmamos via probe que
+      # o caminho histórico /classif/api/publico/nomenclatura/{codigo}
+      # responde 404. Mantido como default por documentação canônica;
+      # quando o Portal Único publicar o novo path, sobrescrever via env
+      # GATEWAY_NCM_SISCOMEX_CODIGO_PATH sem necessidade de PR.
+      codigo-path: /classif/api/publico/nomenclatura/{codigo}
   fipe:
     # Provedor primário: scraper direto da fundação oficial via FlareSolverr.
     # BrasilAPI e Parallelum entraram em colapso simultâneo em 2026-05 (proxies
@@ -231,6 +244,11 @@ resilience4j:
         baseConfig: default
       parallelumFipeCB:
         baseConfig: default
+      # NCM providers (Nomenclatura Comum do Mercosul)
+      brasilApiNcmCB:
+        baseConfig: default
+      siscomexNcmCB:
+        baseConfig: default
       # Placa providers
       wdApiPlacaCB:
         baseConfig: default
@@ -305,6 +323,11 @@ resilience4j:
       brasilApiFipeCB:
         baseConfig: default
       parallelumFipeCB:
+        baseConfig: default
+      # NCM providers
+      brasilApiNcmCB:
+        baseConfig: default
+      siscomexNcmCB:
         baseConfig: default
       # Placa providers
       wdApiPlacaCB:
