@@ -3,8 +3,12 @@ services:
     image: redis:7-alpine
     container_name: gateway-nacional-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    # Acessível apenas via rede interna `gateway-net` — em produção, banco
+    # de dados nunca deve ficar publicado no host. Para depuração local
+    # (redis-cli, RedisInsight), troque temporariamente por `ports:` ou
+    # rode os comandos via `docker exec gateway-nacional-redis redis-cli`.
+    expose:
+      - "6379"
     volumes:
       - redis-data:/data
     healthcheck:
