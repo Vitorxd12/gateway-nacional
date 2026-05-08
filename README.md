@@ -67,13 +67,16 @@ Cascata: **BrasilAPI (com suporte estadual) → Nager.Date → Calculador in-mem
 
 ### Tabela FIPE — Cotação de Veículos
 
-Cascata: **BrasilAPI → Parallelum**.
+Cascata: **FIPE-Oficial (FlareSolverr) → BrasilAPI → Parallelum**.
+
+> **Módulo FIPE agora utiliza extração direta da fundação oficial via FlareSolverr Sidecar, garantindo 100% de disponibilidade independente de APIs de terceiros.** Em 2026-05, BrasilAPI e Parallelum entraram em colapso simultâneo — os proxies deles foram bloqueados pelo upstream `fipe.org.br` (BrasilAPI devolve `500 AxiosError-403` em todas as rotas FIPE; Parallelum aposentou o path direto por código FIPE da v1, e a v2 não expõe consulta direta por código). A reposta foi reposicionar o `FipeOrgScraperClient` como provedor primário: ele consulta a fundação diretamente via o sidecar FlareSolverr, sem depender de intermediários. Os legados continuam na cascata como fallback automático para o dia em que recuperarem.
 
 - DTO unificado: `codigoFipe`, `marca`, `modelo`, `anoModelo` (`int` — `32000` indica Zero KM, convenção FIPE), `combustivel`, `preco` (`BigDecimal`) e `mesReferencia`.
-- **Parsing de moeda BR no ACL**: ambos provedores devolvem `valor` formatado como `"R$ 80.444,00"`. O Anti-Corruption Layer faz strip do prefixo, troca de separadores (`.` thousands → vazio, `,` decimal → `.`) e converte para `BigDecimal` — financial-grade, sem drift.
-- **Filtro client-side por ano no BrasilAPI**: o endpoint primário retorna **todos os anos** do mesmo `codigoFipe` numa array; o ACL seleciona o entry com `anoModelo` solicitado, lançando `ResourceUnavailableException` se nenhum casar (cascateia para Parallelum).
-- **Path do Parallelum configurável** via property — endpoints da Parallelum mudam ocasionalmente; override sem PR.
-- TTL de cache: **15 dias** (FIPE publica mensalmente; janela balanceia ver o novo mês-de-referência logo após cada ciclo de publicação vs. evitar tráfego upstream redundante).
+- **Provedor primário (FIPE-Oficial)**: dois steps em sessão FlareSolverr — `ConsultarTabelaDeReferencia` (código do mês, cacheado em memória por 6h) → `ConsultarValorComTodosParametros` com `tipoConsulta=codigo`. Como o FIPE chaveia por `(codigoFipe, anoModelo, codigoTipoCombustivel)` mas nosso DTO público recebe só os dois primeiros, o cliente faz um sweep dos 5 códigos de combustível mais comuns (`Flex, Gasolina, Diesel, Álcool, Elétrico`) e devolve o primeiro hit — caso típico resolve em 1 POST, pior caso em 5.
+- **Parsing de moeda BR no ACL**: todos os três provedores devolvem `valor` formatado como `"R$ 80.444,00"`. O Anti-Corruption Layer faz strip do prefixo, troca de separadores (`.` thousands → vazio, `,` decimal → `.`) e converte para `BigDecimal` — financial-grade, sem drift.
+- **Filtro client-side por ano no BrasilAPI**: o endpoint legado retorna **todos os anos** do mesmo `codigoFipe` numa array; o ACL seleciona o entry com `anoModelo` solicitado, lançando `ResourceUnavailableException` se nenhum casar (cascateia para Parallelum).
+- **Path do Parallelum configurável** via property — endpoints mudam ocasionalmente; override sem PR.
+- **Latência observada (FIPE-Oficial)**: cold ~5s (Chromium boot + warm-up + 2 POSTs), warm ~40ms (Redis hit). TTL de cache: **15 dias** (FIPE publica mensalmente; janela balanceia ver o novo mês-de-referência logo após cada ciclo de publicação vs. evitar tráfego upstream redundante).
 
 ### Placa — Identificação de Veículos
 
@@ -114,6 +117,7 @@ Duas rotas atômicas que respondem a perguntas que toda auditoria APS faz:
 - **CNES — Profissionais por Estabelecimento** (`/api/v1/saude/cnes/{cnesBase}/profissionais?ibge={ibge}`): JSON puro do DATASUS em duas etapas — lista de equipes do estabelecimento (`/services/estabelecimentos-equipes/{ibge}{cnes}`) seguida da lista de profissionais por equipe (`/services/.../profissionais/{ibge}{cnes}` com `coArea` + `coEquipe`). DTO unificado: `cnesDaUnidade`, `ineEquipe` (zero-pad 10 dígitos), `nome`, `cns`, `cbo`, `cargaHoraria` (soma `chAmb + chOutros`), `dataEntrada` (formato verbatim do upstream).
   - **Por que `ibge` é obrigatório**: o CNES indexa por chave composta `{ibge}{cnes}` — código CNES de 7 dígitos não é único entre municípios. O Swagger explicita esse contrato.
   - ACL alias-tolerante (4 aliases para nome, 5 para CNS, 5 para data de entrada) — renames upstream do DATASUS não quebram consumidores.
+  - **Escopo: somente estabelecimentos com APS.** A rota expõe os endpoints de **Atenção Primária à Saúde** do DATASUS. Estabelecimentos **sem equipes APS cadastradas** (UPAs, hospitais, laboratórios, consultórios, clínicas especializadas) recebem do upstream uma página HTML `"Your connection was refused"` — é a forma como o DATASUS sinaliza ausência de dados de APS, **não falha de infraestrutura**. O gateway detecta esse padrão e devolve **503** com mensagem específica orientando o consumidor (`"O DATASUS sinalizou ausência de dados de APS para este estabelecimento... esta rota só serve estabelecimentos com APS (UBS, postos de saúde)..."`). Retentar com o mesmo CNES devolve a mesma resposta — não é uma falha transiente.
 - **SISAB — Validação da Produção** (`/api/v1/saude/sisab/{ibge}/producao?competencia=yyyy-MM`): a única rota da Saúde que faz **scraping HTML genuíno**. SISAB é JSF/PrimeFaces puro — o pipeline original AutoAPSFinancias dirige por Selenium devido aos AJAX em cascata. O gateway adota uma postura honesta: GET inicial → extração de `javax.faces.ViewState` → POST best-effort com todos os filtros em uma tacada → parse defensivo do `<table>` (mapeamento por texto do header, sobrevive a reordenação de coluna).
   - DTO: `ibge`, `cnes`, `ine`, `statusValidacao` (`Aprovado`/`Reprovado` verbatim).
   - **Trade-off documentado**: ambientes onde o SISAB exige cascata AJAX completa farão o CB tripar e retornarão **503 com mensagem clara** (`"Pode exigir interação JSF AJAX completa (Selenium sidecar)"`). Para deploys que precisam da extração robusta, o caminho é um sidecar Selenium em frente deste endpoint — a estrutura aqui é drop-in.
@@ -654,7 +658,7 @@ curl http://localhost:8080/api/v1/taxas/ipca
 | `SPRING_DATA_REDIS_HOST` | `localhost` | Host do Redis. |
 | `SPRING_DATA_REDIS_PORT` | `6379` | Porta do Redis. |
 | `GATEWAY_RATE_LIMIT_ENABLED` | `false` | **Ative apenas no Playground público** (5 req/min/IP). Em deploy corporativo, mantenha desativado para throughput ilimitado. |
-| `GATEWAY_FLARESOLVERR_URL` | *(vazio)* | URL do sidecar FlareSolverr (ex: `http://flaresolverr:8191`). **Obrigatório para as rotas `/api/v1/saude/*`** (CNES, e-Gestor, SISAB) e habilita o fallback de Web Scraping de placas (`placafipe.com`). Sem esta var, as rotas Saúde devolvem 503 com mensagem clara; o resto do gateway funciona normalmente. Veja a seção **Deploy Produtivo & Bypass Anti-Bot** abaixo. |
+| `GATEWAY_FLARESOLVERR_URL` | *(vazio)* | URL do sidecar FlareSolverr (ex: `http://flaresolverr:8191`). **Obrigatório para `/api/v1/saude/*`** (CNES, e-Gestor, SISAB) **e para `/api/v1/fipe/*`** (provedor primário desde 2026-05, ver seção FIPE acima); habilita também o fallback de Web Scraping de placas (`placafipe.com`). Sem esta var, FIPE e Saúde devolvem 503 com mensagem clara orientando a ativação; o resto do gateway funciona normalmente. Veja a seção **Deploy Produtivo & Bypass Anti-Bot** abaixo. |
 | `SERVER_PORT` | `8080` | Porta HTTP. |
 
 ---
@@ -699,13 +703,14 @@ A solução adotada é o **padrão "Sidecar Cirúrgico"** com [FlareSolverr](htt
 ```
 
 **Sem FlareSolverr** (deploy "leve"):
-- Funcionam normalmente: CEP, CNPJ, calendário, taxas, rastreio, bancos, FIPE, FNS, avaliação OLX/MobiAuto, placa (WDApi/Keplaca quando há tokens).
-- Devolvem **503** com mensagem clara: rotas CNES, e-Gestor, SISAB e o fallback PlacaFipe da cascata de placas. A mensagem é literal: *"Esta rota exige a ativação do sidecar FlareSolverr devido ao WAF governamental."* — operadores entendem o caminho imediatamente.
+- Funcionam normalmente: CEP, CNPJ, calendário, taxas, rastreio, bancos, FNS, avaliação OLX/MobiAuto, placa (WDApi/Keplaca quando há tokens).
+- Devolvem **503** com mensagem clara: rotas CNES, e-Gestor, SISAB, FIPE e o fallback PlacaFipe da cascata de placas. A mensagem é literal: *"Esta rota exige a ativação do sidecar FlareSolverr..."* — operadores entendem o caminho imediatamente.
+- **Importante (mudança 2026-05)**: a rota FIPE migrou para depender do FlareSolverr porque BrasilAPI e Parallelum quebraram simultaneamente upstream. Os dois legados continuam na cascata como fallback automático para o dia em que recuperarem.
 
 **Com FlareSolverr** (deploy "completo"):
-- Todas as rotas funcionam, incluindo as 3 do auditor APS (CNES, e-Gestor, SISAB) e a rota mágica `/api/v1/saude/auditoria/inadimplencia`.
+- Todas as rotas funcionam, incluindo as 3 do auditor APS (CNES, e-Gestor, SISAB), a rota mágica `/api/v1/saude/auditoria/inadimplencia` e a tabela FIPE direto da fundação oficial.
 - A cascata de placas cai limpamente no PlacaFipe scraper sem 403 do Cloudflare.
-- Latência adicional: ~5-10s na primeira chamada (resolve o desafio); cache Redis de 15-365 dias absorve para ~1 ms nas seguintes.
+- Latência adicional: ~5-10s na primeira chamada (resolve o desafio + warm-up de sessão); cache Redis de 15-365 dias absorve para ~40 ms nas seguintes.
 
 ### Como ativar
 

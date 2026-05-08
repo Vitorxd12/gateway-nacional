@@ -170,12 +170,22 @@ public class CnesWebClient implements CnesClientProvider {
             throw new ResourceUnavailableException(PROVIDER_NAME,
                     "CNES devolveu corpo vazio para " + url);
         }
-        // DATASUS occasionally answers a HTML page with "Your connection was
-        // refused" on a 200 — internal backend hiccup. Translate it to a
-        // human-readable RUE before the JSON parser stumbles on the <html>.
+        // DATASUS answers HTTP 200 with an HTML page containing "Your
+        // connection was refused" whenever the requested CNES has no APS
+        // (Atenção Primária à Saúde) data — typically UPAs, hospitais,
+        // laboratórios, consultórios or clínicas especializadas. This is
+        // *the* signal DATASUS uses for "esse estabelecimento não tem dados
+        // de APS pra te dar"; it is NOT a transient infra error. Translating
+        // it here with consumer-actionable wording lets the API caller
+        // distinguish "tente outro CNES" from "tente novamente em 5 min".
         if (body.contains("connection was refused") || body.contains("conexão foi recusada")) {
             throw new ResourceUnavailableException(PROVIDER_NAME,
-                    "DATASUS recusou a conexão interna (HTML 'connection was refused'). Estabelecimento sem APS ou backend instável.");
+                    "O DATASUS sinalizou ausência de dados de APS para este estabelecimento "
+                            + "(retorno padrão do upstream para CNES sem equipes de Atenção Primária — "
+                            + "UPAs, hospitais, laboratórios, consultórios e clínicas especializadas). "
+                            + "Esta rota só serve estabelecimentos com APS (UBS, postos de saúde). "
+                            + "Confirme no portal CNES se o código informado possui equipes APS antes "
+                            + "de retentar — retentar com o mesmo CNES devolverá a mesma resposta.");
         }
         try {
             return objectMapper.readTree(body);

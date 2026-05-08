@@ -47,7 +47,7 @@ public class SaudeEstruturalController {
 
     @GetMapping(value = "/cnes/{cnesBase}/profissionais", produces = MediaType.APPLICATION_JSON_VALUE)
     @Operation(
-            summary = "Profissionais cadastrados num estabelecimento CNES",
+            summary = "Profissionais cadastrados num estabelecimento CNES (apenas APS)",
             description = """
                     Retorna a lista plana de profissionais vinculados ao estabelecimento \
                     (CNES) — agregando todas as equipes registradas via dois endpoints \
@@ -60,6 +60,19 @@ public class SaudeEstruturalController {
                     O upstream do CNES é indexado pela chave composta `{ibge}{cnes}` — \
                     o código CNES de 7 dígitos não é único entre municípios, então o \
                     `ibge` é obrigatório.
+
+                    ## Escopo: somente estabelecimentos com APS
+
+                    Esta rota expõe os **endpoints de Atenção Primária à Saúde** do \
+                    DATASUS. Para estabelecimentos **sem equipes APS cadastradas** \
+                    (UPAs, hospitais, laboratórios, consultórios, clínicas especializadas), \
+                    o DATASUS responde com HTTP 200 contendo a página HTML *"Your \
+                    connection was refused"* — esta é a forma como o backend deles \
+                    sinaliza "sem dados de APS para esta unidade", **não é falha de \
+                    infraestrutura**. Nesses casos o gateway devolve **503** com \
+                    mensagem específica orientando a verificar se o CNES possui \
+                    equipes APS antes de retentar. Retentar com o mesmo CNES \
+                    devolverá exatamente a mesma resposta.
 
                     Resultado é cacheado em Redis por **15 dias** (cadastros mudam no \
                     fechamento da competência mensal)."""
@@ -77,7 +90,10 @@ public class SaudeEstruturalController {
             ),
             @ApiResponse(
                     responseCode = "503",
-                    description = "CNES indisponível ou Circuit Breaker aberto",
+                    description = """
+                            CNES indisponível, Circuit Breaker aberto, **OU** estabelecimento sem dados de APS \
+                            (UPAs, hospitais, laboratórios — comportamento esperado do DATASUS, não falha do gateway). \
+                            O campo `detail` da resposta ProblemDetail descrimina o motivo específico.""",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))
             )
     })
