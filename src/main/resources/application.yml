@@ -78,13 +78,12 @@ gateway:
     brasilapi:
       base-url: https://brasilapi.com.br
     siscomex:
-      base-url: https://portalunico.siscomex.gov.br
-      # Path do recurso por código. Em 2026-05 confirmamos via probe que
-      # o caminho histórico /classif/api/publico/nomenclatura/{codigo}
-      # responde 404. Mantido como default por documentação canônica;
-      # quando o Portal Único publicar o novo path, sobrescrever via env
-      # GATEWAY_NCM_SISCOMEX_CODIGO_PATH sem necessidade de PR.
-      codigo-path: /classif/api/publico/nomenclatura/{codigo}
+      # O Portal Único Siscomex descontinuou a consulta individual por
+      # código (a rota /classif/api/publico/nomenclatura/{codigo} retornava
+      # 404). Hoje o canal oficial é o dump JSON da tabela inteira,
+      # atualizado diariamente. O Siscomex responde 307 e redireciona para
+      # `?perfil=PUBLICO`; o cliente segue o redirect automaticamente.
+      url: https://portalunico.siscomex.gov.br/classif/api/publico/nomenclatura/download/json
   fipe:
     # Provedor primário: scraper direto da fundação oficial via FlareSolverr.
     # BrasilAPI e Parallelum entraram em colapso simultâneo em 2026-05 (proxies
