@@ -118,10 +118,12 @@ Duas rotas atômicas que respondem a perguntas que toda auditoria APS faz:
   - **Por que `ibge` é obrigatório**: o CNES indexa por chave composta `{ibge}{cnes}` — código CNES de 7 dígitos não é único entre municípios. O Swagger explicita esse contrato.
   - ACL alias-tolerante (4 aliases para nome, 5 para CNS, 5 para data de entrada) — renames upstream do DATASUS não quebram consumidores.
   - **Escopo: somente estabelecimentos com APS.** A rota expõe os endpoints de **Atenção Primária à Saúde** do DATASUS. Estabelecimentos **sem equipes APS cadastradas** (UPAs, hospitais, laboratórios, consultórios, clínicas especializadas) recebem do upstream uma página HTML `"Your connection was refused"` — é a forma como o DATASUS sinaliza ausência de dados de APS, **não falha de infraestrutura**. O gateway detecta esse padrão e devolve **503** com mensagem específica orientando o consumidor (`"O DATASUS sinalizou ausência de dados de APS para este estabelecimento... esta rota só serve estabelecimentos com APS (UBS, postos de saúde)..."`). Retentar com o mesmo CNES devolve a mesma resposta — não é uma falha transiente.
-- **SISAB — Validação da Produção** (`/api/v1/saude/sisab/{ibge}/producao?competencia=yyyy-MM`): a única rota da Saúde que faz **scraping HTML genuíno**. SISAB é JSF/PrimeFaces puro — o pipeline original AutoAPSFinancias dirige por Selenium devido aos AJAX em cascata. O gateway adota uma postura honesta: GET inicial → extração de `javax.faces.ViewState` → POST best-effort com todos os filtros em uma tacada → parse defensivo do `<table>` (mapeamento por texto do header, sobrevive a reordenação de coluna).
+- **SISAB — Validação da Produção** (`/api/v1/saude/sisab/{ibge}/producao?competencia=yyyy-MM`): única rota cuja extração depende de um sidecar dedicado de browser real. SISAB é JSF/Mojarra com filtros renderizados por **Bootstrap Multiselect** — plugins JS que mantêm o estado em DOM e só sincronizam para o `<select multiple>` por meio de cliques reais. HTTP puro produz `IndexOutOfBoundsException` no backend (validamos empiricamente em 2026-05). FlareSolverr v3 não expõe primitivas de interação JS (`executeJS`, click). A solução adotada é um **sidecar Python dedicado** (`services/sisab-sidecar/`) que envelopa Selenium + Chromium headless e expõe `POST /scrape` consumido pelo gateway como qualquer outro upstream — com seu próprio Circuit Breaker `sisabScraperCB` (timeout 120s, cobre cold scrape ~30–90s + paginação DataTables).
   - DTO: `ibge`, `cnes`, `ine`, `statusValidacao` (`Aprovado`/`Reprovado` verbatim).
-  - **Trade-off documentado**: ambientes onde o SISAB exige cascata AJAX completa farão o CB tripar e retornarão **503 com mensagem clara** (`"Pode exigir interação JSF AJAX completa (Selenium sidecar)"`). Para deploys que precisam da extração robusta, o caminho é um sidecar Selenium em frente deste endpoint — a estrutura aqui é drop-in.
-  - Nenhum filtro pré-aplicado em `validacao`: a resposta sempre traz Aprovados **e** Reprovados, deixando o filtro de auditoria a cargo do consumidor.
+  - Implementação reusa lógica testada em produção do projeto upstream **AutoAPSFinancias**: cascata `unidGeo=municipio` → UF → IBGE → "Marcar todas as colunas" → `validacao=Aprovado` → competência → submit `verTela`, com `jQuery.active === 0` polls entre cada step.
+  - **Latência observada**: cold ~14s, cache hit Redis ~30ms (`ResilientGenericJacksonSerializer` graceful, TTL 15 dias).
+  - **Engenharia HTTP**: o cliente Java fixa explicitamente HTTP/1.1 no `JdkClientHttpRequestFactory` para falar com o uvicorn — o JDK HTTP Client default tenta upgrade `h2c` que o uvicorn descarta, gerando body vazio do lado do FastAPI.
+  - **Sem sidecar configurado** (`gateway.saude.sisab.sidecar-url` vazio), a rota responde **503 com mensagem clara** orientando ativação — fast-fail, sem timeout inútil.
 - **Quatro Circuit Breakers isolados** no domínio Saúde: `fnsScraperCB`, `eGestorScraperCB`, `cnesScraperCB` (timeout 20s — N+1 chamadas por equipe), `sisabScraperCB` (timeout 30s — round-trip JSF). Falha de um upstream nunca contamina a saúde percebida dos demais.
 - **Cache key composto no CNES**: `'cnes-' + cnesBase + '-' + ibge`, refletindo a chave real do upstream — evita servir profissionais de um município errado caso dois usem códigos CNES coincidentes.
 
@@ -658,7 +660,8 @@ curl http://localhost:8080/api/v1/taxas/ipca
 | `SPRING_DATA_REDIS_HOST` | `localhost` | Host do Redis. |
 | `SPRING_DATA_REDIS_PORT` | `6379` | Porta do Redis. |
 | `GATEWAY_RATE_LIMIT_ENABLED` | `false` | **Ative apenas no Playground público** (5 req/min/IP). Em deploy corporativo, mantenha desativado para throughput ilimitado. |
-| `GATEWAY_FLARESOLVERR_URL` | *(vazio)* | URL do sidecar FlareSolverr (ex: `http://flaresolverr:8191`). **Obrigatório para `/api/v1/saude/*`** (CNES, e-Gestor, SISAB) **e para `/api/v1/fipe/*`** (provedor primário desde 2026-05, ver seção FIPE acima); habilita também o fallback de Web Scraping de placas (`placafipe.com`). Sem esta var, FIPE e Saúde devolvem 503 com mensagem clara orientando a ativação; o resto do gateway funciona normalmente. Veja a seção **Deploy Produtivo & Bypass Anti-Bot** abaixo. |
+| `GATEWAY_FLARESOLVERR_URL` | *(vazio)* | URL do sidecar FlareSolverr (ex: `http://flaresolverr:8191`). **Obrigatório para `/api/v1/saude/cnes/*` e `/api/v1/saude/egestor/*`**, **para `/api/v1/fipe/*`** (provedor primário desde 2026-05, ver seção FIPE acima), e habilita o fallback de Web Scraping de placas (`placafipe.com`). Sem esta var, essas rotas devolvem 503 com mensagem clara; o resto do gateway funciona normalmente. Veja a seção **Deploy Produtivo & Bypass Anti-Bot** abaixo. |
+| `GATEWAY_SISAB_SIDECAR_URL` | *(vazio)* | URL do sidecar SISAB (ex: `http://sisab-sidecar:8000`). **Obrigatório exclusivamente para `/api/v1/saude/sisab/*`** (validação de produção). FlareSolverr não cobre essa rota porque a página JSF/Mojarra do SISAB usa plugins Bootstrap Multiselect cujo estado só sincroniza via cliques reais no DOM — Selenium dedicado é a única abordagem confiável. Sem esta var, SISAB devolve 503 com mensagem clara. Container provido em `services/sisab-sidecar/` no compose. |
 | `SERVER_PORT` | `8080` | Porta HTTP. |
 
 ---
@@ -702,15 +705,19 @@ A solução adotada é o **padrão "Sidecar Cirúrgico"** com [FlareSolverr](htt
                                           gov.br WAF / Cloudflare
 ```
 
-**Sem FlareSolverr** (deploy "leve"):
+**Sem nenhum sidecar** (deploy "leve"):
 - Funcionam normalmente: CEP, CNPJ, calendário, taxas, rastreio, bancos, FNS, avaliação OLX/MobiAuto, placa (WDApi/Keplaca quando há tokens).
-- Devolvem **503** com mensagem clara: rotas CNES, e-Gestor, SISAB, FIPE e o fallback PlacaFipe da cascata de placas. A mensagem é literal: *"Esta rota exige a ativação do sidecar FlareSolverr..."* — operadores entendem o caminho imediatamente.
+- Devolvem **503** com mensagem clara: rotas CNES, e-Gestor, FIPE, SISAB e o fallback PlacaFipe da cascata de placas. A mensagem é literal e específica para cada rota — operadores entendem o caminho imediatamente.
 - **Importante (mudança 2026-05)**: a rota FIPE migrou para depender do FlareSolverr porque BrasilAPI e Parallelum quebraram simultaneamente upstream. Os dois legados continuam na cascata como fallback automático para o dia em que recuperarem.
 
-**Com FlareSolverr** (deploy "completo"):
+**Dois sidecares — papéis distintos**:
+- **FlareSolverr** (`http://flaresolverr:8191`) cobre WAFs anti-bot (Cloudflare em `placafipe.com`, F5 BIG-IP em `cnes.datasus.gov.br`, `relatorioaps-prd.saude.gov.br`, `veiculos.fipe.org.br`). Usado para 4 domínios: FIPE-Oficial, CNES, e-Gestor e fallback PlacaFipe.
+- **SISAB Sidecar** (`http://sisab-sidecar:8000`, Python + Selenium) cobre **exclusivamente** a rota SISAB Validação. FlareSolverr não funciona para essa rota porque exige interação JS real com plugins Bootstrap Multiselect — `executeJS` não é exposto pelo FlareSolverr v3.
+
+**Com ambos os sidecares** (deploy "completo"):
 - Todas as rotas funcionam, incluindo as 3 do auditor APS (CNES, e-Gestor, SISAB), a rota mágica `/api/v1/saude/auditoria/inadimplencia` e a tabela FIPE direto da fundação oficial.
 - A cascata de placas cai limpamente no PlacaFipe scraper sem 403 do Cloudflare.
-- Latência adicional: ~5-10s na primeira chamada (resolve o desafio + warm-up de sessão); cache Redis de 15-365 dias absorve para ~40 ms nas seguintes.
+- Latência adicional: ~5-10s na primeira chamada FIPE/Saúde via FlareSolverr, ~14s na primeira chamada SISAB via Selenium; cache Redis de 15-365 dias absorve as seguintes para ~40 ms.
 
 ### Como ativar
 
