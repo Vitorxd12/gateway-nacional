@@ -6,12 +6,13 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.MediaType;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.util.UriComponentsBuilder;
 
+import java.net.URI;
 import java.net.http.HttpClient;
 import java.text.Normalizer;
 import java.util.ArrayList;
@@ -36,20 +37,29 @@ import java.util.Map;
  *
  * <p>Since FlareSolverr v3 does not expose JS interaction primitives
  * (no {@code executeJS}, no click), we adopted the pragmatic path: a
- * dedicated Python sidecar that owns the browser and exposes a REST
- * endpoint {@code POST /scrape}. The Python implementation reuses the
- * proven-in-production logic from the upstream {@code AutoAPSFinancias}
- * project. From the Java gateway's perspective, the sidecar is just
- * another upstream provider with its own circuit breaker.</p>
+ * dedicated Python sidecar that owns the browser and exposes
+ * {@code GET /scrape?ibge=...&competencia=...}. The Python implementation
+ * reuses the proven-in-production logic from the upstream
+ * {@code AutoAPSFinancias} project. From the Java gateway's perspective,
+ * the sidecar is just another upstream provider with its own circuit
+ * breaker.</p>
  *
- * <h2>Fail-fast when sidecar is not configured</h2>
- * <p>When {@code gateway.saude.sisab.sidecar-url} is empty (default), the
- * call short-circuits with the canonical
- * {@code "Esta rota exige a ativação do sidecar SISAB..."} message —
- * fast 503 instead of futile direct attempts. To enable, deploy the
- * {@code sisab-sidecar} container and inject the URL via env.</p>
+ * <h2>Toggle de resiliência</h2>
+ * <p>Quando {@code gateway.sisab-sidecar.url} é vazio (default), o cliente
+ * <b>nem instancia o {@link RestClient}</b> e qualquer chamada lança
+ * {@link ResourceUnavailableException} com a mensagem canônica orientando
+ * o operador a ativar o sidecar — fast-fail, sem timeout inútil, sem
+ * tentar URL inválida.</p>
  *
- * <h2>Latency and timeout</h2>
+ * <h2>HTTP/1.1 forçado</h2>
+ * <p>O cliente fixa explicitamente HTTP/1.1 no {@link JdkClientHttpRequestFactory}
+ * porque o JDK {@code java.net.http.HttpClient} default tenta upgrade
+ * {@code h2c} em conexões cleartext, e o uvicorn do sidecar fala apenas
+ * HTTP/1.1 — o handshake corrompe o stream e o servidor lê body vazio
+ * mesmo com {@code Content-Length} correto. Validado empiricamente em
+ * 2026-05-08.</p>
+ *
+ * <h2>Latência e timeout</h2>
  * <p>Cold scrapes routinely take 30–90 s under headless Chromium. The
  * {@code @CircuitBreaker} time-limiter for {@code sisabScraperCB} should
  * therefore be set to at least 120 s — see {@code application.yml}.</p>
@@ -60,10 +70,7 @@ public class SisabWebClient implements SisabClientProvider {
 
     public static final String PROVIDER_NAME = "SISAB";
     static final String SIDECAR_REQUIRED_MESSAGE =
-            "Esta rota exige a ativação do sidecar SISAB (Selenium + headless Chromium). "
-                    + "Sem o sidecar configurado via gateway.saude.sisab.sidecar-url, a rota responde 503 "
-                    + "porque a página JSF/Mojarra do SISAB depende de plugins JS Bootstrap Multiselect "
-                    + "que não podem ser replicados por HTTP puro.";
+            "Esta rota exige a ativação do sidecar Python (sisab-sidecar) devido à navegação JSF complexa exigida pelo Governo.";
 
     private static final String SCRAPE_PATH = "/scrape";
 
@@ -71,7 +78,7 @@ public class SisabWebClient implements SisabClientProvider {
     private final boolean enabled;
 
     public SisabWebClient(RestClient.Builder builder,
-                          @Value("${gateway.saude.sisab.sidecar-url:}") String sidecarUrl) {
+                          @Value("${gateway.sisab-sidecar.url:}") String sidecarUrl) {
         this.enabled = sidecarUrl != null && !sidecarUrl.isBlank();
         this.sidecarClient = enabled ? buildHttp1Client(builder, sidecarUrl) : null;
         if (enabled) {
@@ -83,18 +90,14 @@ public class SisabWebClient implements SisabClientProvider {
      * Builds a {@link RestClient} pinned to HTTP/1.1 for talking to the
      * Python/uvicorn sidecar.
      *
-     * <p>Why this matters: the JDK's default {@code java.net.http.HttpClient}
-     * (which Spring RestClient uses under the hood in Spring Boot 4)
-     * negotiates HTTP/2 by default and emits an {@code Upgrade: h2c} +
-     * {@code HTTP2-Settings: ...} header on cleartext connections. Uvicorn
-     * does not speak HTTP/2 — it returns plain HTTP/1.1, but the upgrade
-     * dance corrupts the request stream and the server reads {@code body=b''}
-     * even though {@code Content-Length: 51} was on the wire. Validated
-     * empirically on 2026-05-08 — see the SISAB integration session.</p>
-     *
-     * <p>Forcing HTTP/1.1 at the JDK client side eliminates the upgrade
-     * preamble entirely. We use a dedicated {@link JdkClientHttpRequestFactory}
-     * for this client only — the FlareSolverr / FIPE clients keep the default
+     * <p>The JDK's default {@code java.net.http.HttpClient} (which Spring
+     * RestClient uses under the hood) negotiates HTTP/2 by default and emits
+     * {@code Upgrade: h2c} + {@code HTTP2-Settings: ...} on cleartext.
+     * Uvicorn does not speak HTTP/2 — it returns HTTP/1.1 but the upgrade
+     * dance corrupts the request stream and uvicorn reads an empty body
+     * even with a valid {@code Content-Length}. Forcing HTTP/1.1 at the
+     * JDK client side eliminates the upgrade preamble entirely. Other
+     * clients in this gateway (FlareSolverr, FIPE) keep the default
      * factory because their servers handle HTTP/2 negotiation properly.</p>
      */
     private static RestClient buildHttp1Client(RestClient.Builder builder, String baseUrl) {
@@ -113,36 +116,27 @@ public class SisabWebClient implements SisabClientProvider {
         if (!enabled) {
             throw new ResourceUnavailableException(PROVIDER_NAME, SIDECAR_REQUIRED_MESSAGE);
         }
-        String uf = IbgeUfLookup.ufFromIbge(ibge6);
-        if (uf == null) {
-            throw new ResourceUnavailableException(PROVIDER_NAME,
-                    "SISAB: IBGE inválido para derivação de UF: " + ibge6);
-        }
-        // The sidecar accepts both yyyy-MM and MM/AAAA — we send yyyy-MM as
-        // it matches the gateway's public API contract on the controller side.
         String competencia = String.format(Locale.ROOT, "%04d-%02d", ano, mes);
 
-        Map<String, String> body = Map.of(
-                "uf", uf,
-                "ibge", ibge6,
-                "competencia", competencia
-        );
+        // GET ?ibge=...&competencia=... — UriComponentsBuilder garante
+        // encoding correto dos query params em qualquer caracter especial.
+        URI relativeUri = UriComponentsBuilder.fromPath(SCRAPE_PATH)
+                .queryParam("ibge", ibge6)
+                .queryParam("competencia", competencia)
+                .build()
+                .toUri();
 
         SidecarResponse response;
         try {
-            response = sidecarClient.post()
-                    .uri(SCRAPE_PATH)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(body)
+            response = sidecarClient.get()
+                    .uri(relativeUri)
                     .retrieve()
                     .body(SidecarResponse.class);
         } catch (RestClientResponseException ex) {
-            // Sidecar talked back, but with non-2xx — translate the FastAPI
-            // detail when present so the user-facing message is useful.
             String detail = extractDetail(ex);
             if (ex.getStatusCode().value() == 400) {
-                // Bad input shouldn't open the CB; rethrow as a
-                // ResourceUnavailableException with a 4xx-flavoured message.
+                // Bad input shouldn't open the CB; rethrow with a message that
+                // reflects the upstream rejection rather than a generic fail.
                 throw new ResourceUnavailableException(PROVIDER_NAME,
                         "SISAB sidecar rejeitou parâmetros: " + detail, ex);
             }
@@ -158,11 +152,8 @@ public class SisabWebClient implements SisabClientProvider {
             throw new ResourceUnavailableException(PROVIDER_NAME,
                     "SISAB sidecar devolveu corpo vazio.");
         }
-        if (response.empty()) {
-            log.info("SISAB sidecar reportou 'Nenhum registro' para IBGE={} comp={}", ibge6, competencia);
-            return List.of();
-        }
-        if (response.rows() == null || response.rows().isEmpty()) {
+        if (response.empty() || response.rows() == null || response.rows().isEmpty()) {
+            log.info("SISAB sidecar reportou conjunto vazio para IBGE={} comp={}", ibge6, competencia);
             return List.of();
         }
 
@@ -197,8 +188,7 @@ public class SisabWebClient implements SisabClientProvider {
      * (REGIAO, UF, IBGE, MUNICIPIO, CNES, INE, VALIDACAO, TOTAL, …). Our
      * public DTO only exposes the four fields a downstream consumer needs
      * to act on: ibge, cnes, ine, statusValidacao. The remaining columns
-     * are tolerated but ignored — see {@code @JsonIgnoreProperties(ignoreUnknown=true)}
-     * on {@link SidecarResponse}.</p>
+     * are tolerated but ignored.</p>
      *
      * <p>Numeric fields ({@code IBGE}, {@code CNES}) sometimes arrive as
      * {@code Number} from Pandas-to-JSON when Pandas inferred them as int;
@@ -213,11 +203,11 @@ public class SisabWebClient implements SisabClientProvider {
 
         String cnes = toCleanString(lookupKey(raw, "CNES"));
         String ine = toCleanString(lookupKey(raw, "INE"));
-        // The Pandas-derived response preserves Portuguese diacritics in
-        // some headers (e.g. "Validação", "Região"), and SISAB has reordered
-        // / renamed columns historically. Look up keys via accent-and-case
-        // insensitive normalisation so future drift on the upstream side
-        // does not silently turn "Aprovado" into "DESCONHECIDO".
+        // Pandas preserves Portuguese diacritics in some headers (e.g.
+        // "Validação", "Região"); SISAB has reordered/renamed columns in
+        // the past. Look up keys via accent-and-case insensitive normalisation
+        // so future drift on the upstream side does not silently turn
+        // "Aprovado" into "DESCONHECIDO".
         String validacao = toCleanString(lookupKey(raw, "VALIDACAO"));
 
         if (cnes == null || cnes.isBlank() || ine == null || ine.isBlank()) {
@@ -230,31 +220,6 @@ public class SisabWebClient implements SisabClientProvider {
                 ine,
                 (validacao == null || validacao.isBlank()) ? "DESCONHECIDO" : validacao
         );
-    }
-
-    /**
-     * Returns the value for the first key of {@code raw} that matches the
-     * given canonical key after stripping accents, lowercasing and removing
-     * non-alphanumerics. So both {@code "Validação"} and {@code "VALIDACAO"}
-     * resolve to the same lookup, surviving casing/accent drift in the
-     * Pandas-to-JSON projection on the sidecar side.
-     */
-    private static Object lookupKey(Map<String, Object> raw, String canonicalKey) {
-        String target = normalizeKey(canonicalKey);
-        for (Map.Entry<String, Object> e : raw.entrySet()) {
-            if (normalizeKey(e.getKey()).equals(target)) {
-                return e.getValue();
-            }
-        }
-        return null;
-    }
-
-    private static String normalizeKey(String key) {
-        if (key == null) return "";
-        String stripped = Normalizer.normalize(key, Normalizer.Form.NFD)
-                .replaceAll("\\p{InCombiningDiacriticalMarks}+", "")
-                .toLowerCase(Locale.ROOT);
-        return stripped.replaceAll("[^a-z0-9]", "");
     }
 
     /**
@@ -279,6 +244,31 @@ public class SisabWebClient implements SisabClientProvider {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
+    /**
+     * Returns the value for the first key of {@code raw} that matches the
+     * given canonical key after stripping accents, lowercasing and removing
+     * non-alphanumerics. So both {@code "Validação"} and {@code "VALIDACAO"}
+     * resolve to the same lookup, surviving casing/accent drift on the
+     * Pandas-to-JSON projection in the sidecar.
+     */
+    private static Object lookupKey(Map<String, Object> raw, String canonicalKey) {
+        String target = normalizeKey(canonicalKey);
+        for (Map.Entry<String, Object> e : raw.entrySet()) {
+            if (normalizeKey(e.getKey()).equals(target)) {
+                return e.getValue();
+            }
+        }
+        return null;
+    }
+
+    private static String normalizeKey(String key) {
+        if (key == null) return "";
+        String stripped = Normalizer.normalize(key, Normalizer.Form.NFD)
+                .replaceAll("\\p{InCombiningDiacriticalMarks}+", "")
+                .toLowerCase(Locale.ROOT);
+        return stripped.replaceAll("[^a-z0-9]", "");
+    }
+
     /** Best-effort extraction of FastAPI's {@code detail} field from an error body. */
     private static String extractDetail(RestClientResponseException ex) {
         String body = ex.getResponseBodyAsString();
@@ -294,9 +284,7 @@ public class SisabWebClient implements SisabClientProvider {
     /**
      * Wire-shape of the sidecar response. Matches {@code app.py:ScrapeResponse}.
      * Unknown fields are ignored so additive changes on the sidecar (e.g., new
-     * meta fields) do not break the gateway. Records are nullable-friendly,
-     * so {@code competencia=null} and {@code rows=null} pass through cleanly
-     * — the calling site already null-guards both.
+     * meta fields) do not break the gateway.
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record SidecarResponse(
