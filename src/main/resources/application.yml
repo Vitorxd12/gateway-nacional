@@ -110,11 +110,17 @@ gateway:
       base-url: https://cnes.datasus.gov.br
       user-agent: Mozilla/5.0 (compatible; GatewayNacional/1.0)
     sisab:
-      # JSF/PrimeFaces — gateway tenta submissão best-effort com ViewState.
-      # Quando exigir interação AJAX completa, CB devolve 503 com mensagem clara.
+      # SISAB depende do sidecar Python dedicado (Selenium + Chromium headless).
+      # A página JSF/Mojarra usa plugins Bootstrap Multiselect cujo estado só é
+      # sincronizado para o <select> via cliques reais no DOM — HTTP puro
+      # produz IndexOutOfBoundsException no backend. Sem este sidecar
+      # configurado, /api/v1/saude/sisab/* devolve 503 com mensagem clara.
+      sidecar-url: ${GATEWAY_SISAB_SIDECAR_URL:}
+      # Mantemos as base-url originais por completude — não são usadas pelo
+      # cliente atual (que delega 100% pro sidecar), mas servem como
+      # documentação canônica do upstream e ponto de extensão futura.
       base-url: https://sisab.saude.gov.br
       report-path: /paginas/acessoRestrito/relatorio/federal/envio/RelValidacao.xhtml
-      user-agent: Mozilla/5.0 (compatible; GatewayNacional/1.0)
   avaliacao:
     # Marketplaces consultados via Web Scraping. URLs e templates são
     # configuráveis porque a estrutura dos sites muda — basta sobrescrever
@@ -320,14 +326,16 @@ resilience4j:
         baseConfig: default
         timeoutDuration: 15s
       # CNES é JSON puro porém faz N chamadas (1 por equipe); 20s cobre
-      # estabelecimentos com muitas equipes. SISAB é JSF — 30s para o
-      # round-trip de form submission completo.
+      # estabelecimentos com muitas equipes. SISAB delega para sidecar Python
+      # com Selenium headless — cold scrape leva 30–90s na cascata JSF
+      # completa (jQuery.active waits, paginação DataTables); 120s evita
+      # tripar o CB em municípios grandes com muitas equipes.
       cnesScraperCB:
         baseConfig: default
         timeoutDuration: 20s
       sisabScraperCB:
         baseConfig: default
-        timeoutDuration: 30s
+        timeoutDuration: 120s
 
 logging:
   level:
