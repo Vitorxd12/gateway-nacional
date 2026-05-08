@@ -3,6 +3,7 @@ package br.com.cernebr.gateway_nacional.fipe.service;
 import br.com.cernebr.gateway_nacional.exception.ResourceUnavailableException;
 import br.com.cernebr.gateway_nacional.fipe.client.BrasilApiFipeClient;
 import br.com.cernebr.gateway_nacional.fipe.client.FipeClientProvider;
+import br.com.cernebr.gateway_nacional.fipe.client.FipeOrgScraperClient;
 import br.com.cernebr.gateway_nacional.fipe.client.ParallelumFipeClient;
 import br.com.cernebr.gateway_nacional.fipe.dto.FipePrecoResponse;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -16,7 +17,16 @@ import java.util.Locale;
 
 /**
  * Orchestrates the cascade fallback for FIPE vehicle quotes.
- * Order: BrasilAPI → Parallelum.
+ *
+ * <p>Order: <b>FIPE-Oficial (FlareSolverr) → BrasilAPI → Parallelum</b>.
+ * The official scraper became the primary on 2026-05-08 — at that date both
+ * BrasilAPI's and Parallelum's FIPE proxies were broken upstream
+ * (BrasilAPI returns 500/AxiosError-403 for every FIPE route, Parallelum's
+ * direct-by-fipe-code v1 path was retired). Scraping the foundation
+ * directly via the FlareSolverr sidecar bypasses both intermediaries and
+ * recovers full FIPE availability without external dependencies. The two
+ * legacy providers stay in the cascade as deferred fallbacks so the gateway
+ * keeps working the day they recover.</p>
  *
  * <p>Cache key is composite — {@code "{codigoFipe}-{anoModelo}"} — so quotes
  * for different years of the same model never collide. TTL of 15 days is
@@ -37,10 +47,11 @@ public class FipeService {
     private final List<FipeClientProvider> providersInOrder;
     private final MeterRegistry meterRegistry;
 
-    public FipeService(BrasilApiFipeClient primary,
-                       ParallelumFipeClient secondary,
+    public FipeService(FipeOrgScraperClient primary,
+                       BrasilApiFipeClient legacyOne,
+                       ParallelumFipeClient legacyTwo,
                        MeterRegistry meterRegistry) {
-        this.providersInOrder = List.of(primary, secondary);
+        this.providersInOrder = List.of(primary, legacyOne, legacyTwo);
         this.meterRegistry = meterRegistry;
     }
 
