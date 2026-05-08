@@ -94,9 +94,21 @@ public class GlobalExceptionHandler {
                 traceId, ex.getProviderName(), request.getMethod(), request.getRequestURI(),
                 ex.getMessage(), ex);
 
+        // Surface the provider's own message as the ProblemDetail "detail" —
+        // every {@link ResourceUnavailableException} message in this codebase
+        // is human-targeted and actionable (e.g., "DATASUS recusou a conexão
+        // interna — estabelecimento sem APS"). Hiding it behind a generic
+        // "tente novamente" denies the consumer the information needed to
+        // decide between "retry" and "fix the query". A static fallback is
+        // still used when {@code ex.getMessage()} is empty or null.
+        String specificDetail = ex.getMessage();
+        if (specificDetail == null || specificDetail.isBlank()) {
+            specificDetail = "O provedor de dados está temporariamente indisponível. Tente novamente em alguns instantes.";
+        }
+
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(
                 HttpStatus.SERVICE_UNAVAILABLE,
-                "O provedor de dados está temporariamente indisponível. Por favor, tente novamente em alguns instantes."
+                specificDetail
         );
         problem.setTitle("Serviço indisponível");
         problem.setType(TYPE_RESOURCE_UNAVAIL);

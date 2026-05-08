@@ -67,6 +67,12 @@ gateway:
     brasilapi:
       base-url: https://brasilapi.com.br
   fipe:
+    # Provedor primário: scraper direto da fundação oficial via FlareSolverr.
+    # BrasilAPI e Parallelum entraram em colapso simultâneo em 2026-05 (proxies
+    # deles bloqueados pelo upstream da FIPE) — ir direto na fonte com
+    # FlareSolverr é o único caminho que não depende de terceiros frágeis.
+    fipeorg:
+      base-url: https://veiculos.fipe.org.br
     brasilapi:
       base-url: https://brasilapi.com.br
     parallelum:
@@ -211,6 +217,8 @@ resilience4j:
       brasilApiBancosCB:
         baseConfig: default
       # FIPE providers
+      fipeOrgScraperCB:
+        baseConfig: default
       brasilApiFipeCB:
         baseConfig: default
       parallelumFipeCB:
@@ -281,7 +289,11 @@ resilience4j:
       # Bancos providers
       brasilApiBancosCB:
         baseConfig: default
-      # FIPE providers
+      # FIPE providers — fipeOrg é scraper via FlareSolverr (Chromium cold ~5s + warm-up
+      # GET + 1-5 POSTs por sweep de combustível); 30s cobre o caso pior com folga.
+      fipeOrgScraperCB:
+        baseConfig: default
+        timeoutDuration: 30s
       brasilApiFipeCB:
         baseConfig: default
       parallelumFipeCB:
