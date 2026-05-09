@@ -72,6 +72,13 @@ gateway:
   bancos:
     brasilapi:
       base-url: https://brasilapi.com.br
+  cambio:
+    # AwesomeAPI — endpoint público (sem chave) de cotações em tempo (quase)
+    # real. Aceita múltiplos pares por vírgula (USD-BRL,EUR-BRL,BTC-BRL).
+    # Cache curto de 3min protege a quota upstream contra burst de
+    # dashboards/ERPs.
+    awesomeapi:
+      base-url: https://economia.awesomeapi.com.br
   cnae:
     # Classificação Nacional de Atividades Econômicas — pareada com CNPJ.
     # IBGE servicodados é a fonte canônica (publica a tabela CONCLA).
@@ -243,6 +250,9 @@ resilience4j:
       # Bancos providers
       brasilApiBancosCB:
         baseConfig: default
+      # Câmbio providers
+      awesomeApiCambioCB:
+        baseConfig: default
       # FIPE providers
       fipeOrgScraperCB:
         baseConfig: default
@@ -323,6 +333,9 @@ resilience4j:
         baseConfig: default
       # Bancos providers
       brasilApiBancosCB:
+        baseConfig: default
+      # Câmbio providers
+      awesomeApiCambioCB:
         baseConfig: default
       # FIPE providers — fipeOrg é scraper via FlareSolverr (Chromium cold ~5s + warm-up
       # GET + 1-5 POSTs por sweep de combustível); 30s cobre o caso pior com folga.

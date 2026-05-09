@@ -45,6 +45,11 @@ public class CacheConfig {
     private static final Duration NCM_TTL = Duration.ofDays(30);
     // CNAE (CONCLA) — atualizada raras vezes por ano; mesmo TTL da NCM.
     private static final Duration CNAE_TTL = Duration.ofDays(30);
+    // Câmbio — cotações reais flutuam a cada segundo, mas absorver 100%
+    // do tráfego mata o quota da AwesomeAPI. 3 minutos é o equilíbrio:
+    // suficiente para colapsar bursts de dashboards/ERPs em uma única
+    // requisição upstream, curto o bastante para não estagnar a cotação.
+    private static final Duration CAMBIO_TTL = Duration.ofMinutes(3);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
@@ -56,22 +61,24 @@ public class CacheConfig {
     private static final String SAUDE_CACHE = "saude";
     private static final String NCM_CACHE = "ncm";
     private static final String CNAE_CACHE = "cnae";
+    private static final String CAMBIO_CACHE = "cambio";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
         RedisCacheConfiguration defaultConfig = baseConfig().entryTtl(DEFAULT_TTL);
 
-        Map<String, RedisCacheConfiguration> perCacheConfigs = Map.of(
-                CEPS_CACHE, baseConfig().entryTtl(CEPS_TTL),
-                FERIADOS_CACHE, baseConfig().entryTtl(FERIADOS_TTL),
-                TAXAS_CACHE, baseConfig().entryTtl(TAXAS_TTL),
-                RASTREIOS_CACHE, baseConfig().entryTtl(RASTREIOS_TTL),
-                BANCOS_CACHE, baseConfig().entryTtl(BANCOS_TTL),
-                FIPE_CACHE, baseConfig().entryTtl(FIPE_TTL),
-                PLACAS_CACHE, baseConfig().entryTtl(PLACAS_TTL),
-                SAUDE_CACHE, baseConfig().entryTtl(SAUDE_TTL),
-                NCM_CACHE, baseConfig().entryTtl(NCM_TTL),
-                CNAE_CACHE, baseConfig().entryTtl(CNAE_TTL)
+        Map<String, RedisCacheConfiguration> perCacheConfigs = Map.ofEntries(
+                Map.entry(CEPS_CACHE, baseConfig().entryTtl(CEPS_TTL)),
+                Map.entry(FERIADOS_CACHE, baseConfig().entryTtl(FERIADOS_TTL)),
+                Map.entry(TAXAS_CACHE, baseConfig().entryTtl(TAXAS_TTL)),
+                Map.entry(RASTREIOS_CACHE, baseConfig().entryTtl(RASTREIOS_TTL)),
+                Map.entry(BANCOS_CACHE, baseConfig().entryTtl(BANCOS_TTL)),
+                Map.entry(FIPE_CACHE, baseConfig().entryTtl(FIPE_TTL)),
+                Map.entry(PLACAS_CACHE, baseConfig().entryTtl(PLACAS_TTL)),
+                Map.entry(SAUDE_CACHE, baseConfig().entryTtl(SAUDE_TTL)),
+                Map.entry(NCM_CACHE, baseConfig().entryTtl(NCM_TTL)),
+                Map.entry(CNAE_CACHE, baseConfig().entryTtl(CNAE_TTL)),
+                Map.entry(CAMBIO_CACHE, baseConfig().entryTtl(CAMBIO_TTL))
         );
 
         return RedisCacheManager.builder(connectionFactory)
