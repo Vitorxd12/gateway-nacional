@@ -34,3 +34,6 @@ build/
 
 ### Local research / reference projects (not part of the gateway build) ###
 AutoAPSFinancias/
+
+.claude/
+tmp/
