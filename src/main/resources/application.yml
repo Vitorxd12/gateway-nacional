@@ -79,6 +79,24 @@ gateway:
     # dashboards/ERPs.
     awesomeapi:
       base-url: https://economia.awesomeapi.com.br
+  juridico:
+    sancoes:
+      # CGU Portal da Transparência (CEIS) — exige header chave-api-dados
+      # obtido por cadastro em portaldatransparencia.gov.br/api-de-dados/cadastrar-email.
+      # Sem a chave, o SancoesClient curto-circuita antes do round-trip e
+      # devolve 503 com mensagem específica.
+      cgu:
+        base-url: https://api.portaldatransparencia.gov.br
+        path: /api-de-dados/ceis
+        cnpj-param: cnpjSancionado
+        api-key: ${GATEWAY_JURIDICO_SANCOES_CGU_API_KEY:}
+    processos:
+      # DataJud / CNJ — POST a /api_publica_{alias}/_search com body
+      # Elasticsearch DSL. A api-key padrão é a chave pública documentada
+      # pelo CNJ; sobrescrever via env caso o CNJ rotacione a credencial.
+      datajud:
+        base-url: https://api-publica.datajud.cnj.jus.br
+        api-key: ${GATEWAY_JURIDICO_PROCESSOS_DATAJUD_API_KEY:cDZHYzlZa0JadVREZDJCendQbXY6SkJlTzNjLV9TRENyQk1RdnFKZGRQdw==}
   cnae:
     # Classificação Nacional de Atividades Econômicas — pareada com CNPJ.
     # IBGE servicodados é a fonte canônica (publica a tabela CONCLA).
@@ -253,6 +271,13 @@ resilience4j:
       # Câmbio providers
       awesomeApiCambioCB:
         baseConfig: default
+      # Jurídico providers
+      cguSancoesCB:
+        baseConfig: default
+      cndSidecarCB:
+        baseConfig: default
+      datajudCB:
+        baseConfig: default
       # FIPE providers
       fipeOrgScraperCB:
         baseConfig: default
@@ -337,6 +362,18 @@ resilience4j:
       # Câmbio providers
       awesomeApiCambioCB:
         baseConfig: default
+      # Jurídico providers — DataJud e CGU CEIS rodam queries pesadas em
+      # janelas de carga; Selenium do sidecar de CND pode levar dezenas de
+      # segundos para emitir a certidão (cascata de formulários JSF).
+      cguSancoesCB:
+        baseConfig: default
+        timeoutDuration: 10s
+      cndSidecarCB:
+        baseConfig: default
+        timeoutDuration: 60s
+      datajudCB:
+        baseConfig: default
+        timeoutDuration: 10s
       # FIPE providers — fipeOrg é scraper via FlareSolverr (Chromium cold ~5s + warm-up
       # GET + 1-5 POSTs por sweep de combustível); 30s cobre o caso pior com folga.
       fipeOrgScraperCB:

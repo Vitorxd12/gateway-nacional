@@ -1,5 +1,6 @@
 package br.com.cernebr.gateway_nacional.exception;
 
+import br.com.cernebr.gateway_nacional.financeiro.boletos.exception.BoletoInvalidoException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
@@ -181,6 +182,27 @@ public class GlobalExceptionHandler {
         problem.setProperty("resourceType", ex.getResourceType());
 
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(problem);
+    }
+
+    /**
+     * Boletos com DAC inválido (módulo 10/11 FEBRABAN) ou comprimento fora
+     * do layout. Trata como problema do input do cliente — 400 — e devolve
+     * a mensagem do parser, que já vem com a posição/campo do dígito que
+     * falhou ("Campo 2: DV mod-10 inválido (esperado 7, recebido 3).").
+     */
+    @ExceptionHandler(BoletoInvalidoException.class)
+    public ResponseEntity<ProblemDetail> handleBoletoInvalido(BoletoInvalidoException ex,
+                                                              HttpServletRequest request) {
+        log.info("Boleto inválido em {} {}: {}",
+                request.getMethod(), request.getRequestURI(), ex.getMessage());
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
+        problem.setTitle("Linha digitável inválida");
+        problem.setType(TYPE_VALIDATION);
+        problem.setInstance(URI.create(request.getRequestURI()));
+        problem.setProperty("timestamp", OffsetDateTime.now());
+
+        return ResponseEntity.badRequest().body(problem);
     }
 
     @ExceptionHandler(Exception.class)

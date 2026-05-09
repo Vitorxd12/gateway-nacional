@@ -50,6 +50,14 @@ public class CacheConfig {
     // suficiente para colapsar bursts de dashboards/ERPs em uma única
     // requisição upstream, curto o bastante para não estagnar a cotação.
     private static final Duration CAMBIO_TTL = Duration.ofMinutes(3);
+    // Sanções (CGU/CEIS) — publicações no portal entram com semanas de
+    // delay frente ao DOU; 7 dias absorve a janela típica sem servir
+    // dados antigos demais para devida diligência de compras.
+    private static final Duration SANCOES_TTL = Duration.ofDays(7);
+    // Processos (DataJud) — tribunais publicam movimentos em batches D+1;
+    // 24h cobre o ciclo de atualização sem desperdiçar Redis com keys
+    // que mudam a cada 30 minutos.
+    private static final Duration PROCESSOS_TTL = Duration.ofHours(24);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
@@ -62,6 +70,8 @@ public class CacheConfig {
     private static final String NCM_CACHE = "ncm";
     private static final String CNAE_CACHE = "cnae";
     private static final String CAMBIO_CACHE = "cambio";
+    private static final String SANCOES_CACHE = "sancoes";
+    private static final String PROCESSOS_CACHE = "processos";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -78,7 +88,9 @@ public class CacheConfig {
                 Map.entry(SAUDE_CACHE, baseConfig().entryTtl(SAUDE_TTL)),
                 Map.entry(NCM_CACHE, baseConfig().entryTtl(NCM_TTL)),
                 Map.entry(CNAE_CACHE, baseConfig().entryTtl(CNAE_TTL)),
-                Map.entry(CAMBIO_CACHE, baseConfig().entryTtl(CAMBIO_TTL))
+                Map.entry(CAMBIO_CACHE, baseConfig().entryTtl(CAMBIO_TTL)),
+                Map.entry(SANCOES_CACHE, baseConfig().entryTtl(SANCOES_TTL)),
+                Map.entry(PROCESSOS_CACHE, baseConfig().entryTtl(PROCESSOS_TTL))
         );
 
         return RedisCacheManager.builder(connectionFactory)
