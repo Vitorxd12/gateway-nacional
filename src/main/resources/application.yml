@@ -278,6 +278,9 @@ resilience4j:
         baseConfig: default
       datajudCB:
         baseConfig: default
+      # Saúde — indicadores Previne Brasil/PMA via sidecar
+      sisabIndicadoresCB:
+        baseConfig: default
       # FIPE providers
       fipeOrgScraperCB:
         baseConfig: default
@@ -374,6 +377,12 @@ resilience4j:
       datajudCB:
         baseConfig: default
         timeoutDuration: 10s
+      # Indicadores Previne Brasil — sidecar Python percorre cascata
+      # JSF/Mojarra do SISAB (DataTables paginadas + multiselect cliente);
+      # cold scrape leva 30-90s no caso pior. 120s alinha com sisabScraperCB.
+      sisabIndicadoresCB:
+        baseConfig: default
+        timeoutDuration: 120s
       # FIPE providers — fipeOrg é scraper via FlareSolverr (Chromium cold ~5s + warm-up
       # GET + 1-5 POSTs por sweep de combustível); 30s cobre o caso pior com folga.
       fipeOrgScraperCB:
