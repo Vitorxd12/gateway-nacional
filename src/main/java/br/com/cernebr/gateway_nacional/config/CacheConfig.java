@@ -58,6 +58,11 @@ public class CacheConfig {
     // 24h cobre o ciclo de atualização sem desperdiçar Redis com keys
     // que mudam a cada 30 minutos.
     private static final Duration PROCESSOS_TTL = Duration.ofHours(24);
+    // Indicadores APS (Previne Brasil/PMA) — uma vez consolidada a nota
+    // de um quadrimestre, ela é frozen pelo Ministério da Saúde até a
+    // próxima portaria. 30 dias dá folga para refresh sem refletir um
+    // valor antigo após eventual reabertura administrativa de quadrimestre.
+    private static final Duration INDICADORES_APS_TTL = Duration.ofDays(30);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
@@ -72,6 +77,7 @@ public class CacheConfig {
     private static final String CAMBIO_CACHE = "cambio";
     private static final String SANCOES_CACHE = "sancoes";
     private static final String PROCESSOS_CACHE = "processos";
+    private static final String INDICADORES_APS_CACHE = "indicadoresAps";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -90,7 +96,8 @@ public class CacheConfig {
                 Map.entry(CNAE_CACHE, baseConfig().entryTtl(CNAE_TTL)),
                 Map.entry(CAMBIO_CACHE, baseConfig().entryTtl(CAMBIO_TTL)),
                 Map.entry(SANCOES_CACHE, baseConfig().entryTtl(SANCOES_TTL)),
-                Map.entry(PROCESSOS_CACHE, baseConfig().entryTtl(PROCESSOS_TTL))
+                Map.entry(PROCESSOS_CACHE, baseConfig().entryTtl(PROCESSOS_TTL)),
+                Map.entry(INDICADORES_APS_CACHE, baseConfig().entryTtl(INDICADORES_APS_TTL))
         );
 
         return RedisCacheManager.builder(connectionFactory)
