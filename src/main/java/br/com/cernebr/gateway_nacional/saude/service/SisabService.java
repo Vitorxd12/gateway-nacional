@@ -19,6 +19,15 @@ import java.util.Locale;
  * each call drives a JSF form submission against gov.br, which is brittle
  * and slow — re-running the same query inside the publication window is
  * pure waste.
+ *
+ * <p><b>ATENÇÃO: Não migrar para
+ * {@link br.com.cernebr.gateway_nacional.config.HedgedExecutor} nem
+ * {@link br.com.cernebr.gateway_nacional.config.RefreshAheadCache}.</b>
+ * Provider de alto custo computacional (submissão JSF gov.br + Selenium
+ * sidecar). Single-provider, então hedge não se aplica de saída; e mesmo
+ * uma futura migração para multi-provider precisa ficar em cascata para
+ * não disparar múltiplas sessões pesadas. RAC dispararia o mesmo trabalho
+ * pesado em background. Mantém {@code @Cacheable} puro.</p>
  */
 @Slf4j
 @Service

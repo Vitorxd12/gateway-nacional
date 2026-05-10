@@ -27,6 +27,15 @@ import java.util.concurrent.Executors;
  * estabelecimentos APS do {@link CnesService} para entregar uma lista
  * priorizada de unidades que precisam de busca ativa.
  *
+ * <p><b>ATENÇÃO: Não migrar para
+ * {@link br.com.cernebr.gateway_nacional.config.HedgedExecutor} nem
+ * {@link br.com.cernebr.gateway_nacional.config.RefreshAheadCache}.</b>
+ * Orquestrador de dois services pesados (sidecar SISAB + scraper CNES). Os
+ * dois colaboradores já têm caches Redis próprios; o fan-out em virtual
+ * threads já paraleliza. Hedging não se aplica (não há providers equivalentes
+ * a paralelizar — são domínios distintos compostos), e RAC duplicaria o
+ * trabalho pesado dos downstreams em background. Mantém composição atual.</p>
+ *
  * <h2>Por que sem {@code @Cacheable} aqui</h2>
  * <p>Os dois colaboradores já têm caches Redis próprios (30 dias para
  * indicadores SISAB no namespace {@code indicadoresAps}, 15 dias para

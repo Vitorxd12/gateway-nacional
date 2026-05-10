@@ -21,6 +21,14 @@ import java.util.Locale;
  * {@code {ibge}{cnes}} — caching by CNES alone would risk serving the wrong
  * municipality's profissionais if two cities use coincident CNES codes
  * (rare but documented).</p>
+ *
+ * <p><b>ATENÇÃO: Não migrar para
+ * {@link br.com.cernebr.gateway_nacional.config.HedgedExecutor} nem
+ * {@link br.com.cernebr.gateway_nacional.config.RefreshAheadCache}.</b>
+ * Provider de alto custo computacional (FlareSolverr contra cnes.datasus.gov.br
+ * com WAF anti-bot). RAC dispararia o mesmo trabalho pesado em background.
+ * Além disso, {@code findProfissionais} retorna {@code List<>} — incompatível
+ * com o wrapper {@code CachedEntry}. Mantém {@code @Cacheable} puro.</p>
  */
 @Slf4j
 @Service

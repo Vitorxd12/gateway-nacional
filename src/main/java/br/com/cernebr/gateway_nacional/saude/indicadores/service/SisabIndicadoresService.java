@@ -18,6 +18,14 @@ import java.util.Locale;
  * nota é frozen — só muda em portaria de reabertura administrativa, raro.
  * A chave concatena {@code ibge:quadrimestre} para isolar municípios e
  * permitir invalidação cirúrgica via {@code DEL indicadoresAps::355030:2025Q3}.</p>
+ *
+ * <p><b>ATENÇÃO: Não migrar para
+ * {@link br.com.cernebr.gateway_nacional.config.HedgedExecutor} nem
+ * {@link br.com.cernebr.gateway_nacional.config.RefreshAheadCache}.</b>
+ * Provider de alto custo computacional (sidecar Python + Selenium contra o
+ * portal SISAB do DataSUS). RAC dispararia o mesmo trabalho pesado em
+ * background — efeito oposto ao desejado quando o custo upstream é o
+ * próprio gargalo. Mantém {@code @Cacheable} puro com TTL longo.</p>
  */
 @Slf4j
 @Service

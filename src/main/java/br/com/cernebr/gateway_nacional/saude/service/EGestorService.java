@@ -21,6 +21,13 @@ import java.util.Locale;
  *
  * <p>Cache TTL of 15 days matches the federal payment cycle; the e-Gestor
  * publication is monthly and rarely revised inside that window.</p>
+ *
+ * <p><b>ATENÇÃO: Não migrar para
+ * {@link br.com.cernebr.gateway_nacional.config.HedgedExecutor} nem
+ * {@link br.com.cernebr.gateway_nacional.config.RefreshAheadCache}.</b>
+ * Provider de alto custo computacional (portal e-Gestor APS gov.br via
+ * scraper). Retorna {@code List<>} (incompatível com CachedEntry de qualquer
+ * jeito). Mantém {@code @Cacheable} puro.</p>
  */
 @Slf4j
 @Service

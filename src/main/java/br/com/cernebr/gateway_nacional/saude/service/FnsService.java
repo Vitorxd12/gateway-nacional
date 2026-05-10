@@ -14,7 +14,15 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Orchestrates FNS repasse retrieval. Single-provider for now (the FNS portal
+ * <b>ATENÇÃO: Não migrar para
+ * {@link br.com.cernebr.gateway_nacional.config.HedgedExecutor} nem
+ * {@link br.com.cernebr.gateway_nacional.config.RefreshAheadCache}.</b>
+ * Provider de alto custo computacional (portal FNS gov.br com sessão
+ * multi-step e anti-bot). RAC dispararia o mesmo "session dance" pesado
+ * em background. Retorna {@code List<>} (incompatível com CachedEntry de
+ * qualquer jeito). Mantém {@code @Cacheable} puro.
+ *
+ * <p>Orchestrates FNS repasse retrieval. Single-provider for now (the FNS portal
  * is the authoritative source — there is no functional equivalent we can
  * cascade to), but kept on the same orchestrator pattern so that:
  * <ul>

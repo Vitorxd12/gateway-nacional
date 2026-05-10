@@ -27,6 +27,16 @@ import java.util.stream.Collectors;
  * independent gov.br integrations into a single actionable verdict: <i>which
  * professional caused the município to lose a federal repasse?</i>
  *
+ * <p><b>ATENÇÃO: Não migrar para
+ * {@link br.com.cernebr.gateway_nacional.config.HedgedExecutor} nem
+ * {@link br.com.cernebr.gateway_nacional.config.RefreshAheadCache}.</b>
+ * Orquestra três services pesados (e-Gestor, CNES, SISAB), todos contra
+ * portais gov.br com WAF/Selenium. O fan-out interno em virtual threads já
+ * paraleliza os três downstreams; cada um já tem cache Redis próprio. Adicionar
+ * cache no agregador duplicaria armazenamento e dificultaria invalidação
+ * cirúrgica — a entrada agregada teria TTL próprio que poderia divergir das
+ * fontes. Mantém composição atual.</p>
+ *
  * <h2>Pipeline</h2>
  * Three downstreams run concurrently on virtual threads — each is independently
  * cached in Redis (15 days TTL inside the {@code "saude"} cache namespace),
