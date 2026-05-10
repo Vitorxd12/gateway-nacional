@@ -148,6 +148,24 @@ gateway:
     # — não precisa de configuração externa.
     ibge:
       base-url: https://servicodados.ibge.gov.br
+  ibge:
+    # Domínio geográfico próprio: lista de UFs, detalhe (com população),
+    # municípios por UF. Hedge entre 2 providers REST simples para municípios.
+    # Provider Wikipedia da BrasilAPI NÃO foi portado (política PESADO —
+    # scraping HTML é frágil e custoso).
+    gov:
+      base-url: https://servicodados.ibge.gov.br
+    dados-abertos-br:
+      # API legada em HTTP (não HTTPS). Sobrescrever caso uma versão segura apareça.
+      base-url: http://educacao.dadosabertosbr.com
+  cvm:
+    # Cadastro CVM — corretoras (ZIP→CSV) e fundos (CSV direto). Single
+    # provider (a CVM é fonte canônica). URLs absolutas porque os arquivos
+    # vivem em paths fixos do dados.cvm.gov.br.
+    corretoras:
+      url: https://dados.cvm.gov.br/dados/INTERMED/CAD/DADOS/cad_intermed.zip
+    fundos:
+      url: https://dados.cvm.gov.br/dados/FI/CAD/DADOS/cad_fi.csv
   ncm:
     # Nomenclatura Comum do Mercosul (NCM) — fundamental para emissão de
     # NF-e. Cascata BrasilAPI → Siscomex; cache de 30 dias.
@@ -393,6 +411,24 @@ resilience4j:
         baseConfig: default
       pixBcbCsvCB:
         baseConfig: default
+      # IBGE — UFs (single provider) + municípios (hedge) + população
+      # (best-effort, agregado v3). Cada operação isolada para failure
+      # independente.
+      ibgeGovUfCB:
+        baseConfig: default
+      ibgeGovMunicipiosCB:
+        baseConfig: default
+      ibgePopulacaoCB:
+        baseConfig: default
+      dadosAbertosBrCB:
+        baseConfig: default
+      # CVM — single provider, mas o download é pesado (ZIP de corretoras,
+      # CSV de ~10MB pra fundos). CBs isolados pra que falha de um snapshot
+      # não derrube o outro.
+      cvmCorretorasCB:
+        baseConfig: default
+      cvmFundosCB:
+        baseConfig: default
 
   timelimiter:
     configs:
@@ -540,6 +576,24 @@ resilience4j:
       pixBcbCsvCB:
         baseConfig: default
         timeoutDuration: 30s
+      # IBGE providers — REST simples; defaults 3s sobram.
+      ibgeGovUfCB:
+        baseConfig: default
+      ibgeGovMunicipiosCB:
+        baseConfig: default
+      ibgePopulacaoCB:
+        baseConfig: default
+      dadosAbertosBrCB:
+        baseConfig: default
+      # CVM — download de ZIP/CSV grande + extração + parse. Teto generoso
+      # (60s) porque a 1ª chamada do dia faz I/O pesado; chamadas subsequentes
+      # vêm do cache e não passam por aqui.
+      cvmCorretorasCB:
+        baseConfig: default
+        timeoutDuration: 60s
+      cvmFundosCB:
+        baseConfig: default
+        timeoutDuration: 60s
 
 logging:
   level:

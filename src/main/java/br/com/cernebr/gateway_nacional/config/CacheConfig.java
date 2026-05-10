@@ -81,6 +81,15 @@ public class CacheConfig {
     // caminho crítico; o fallback embutido cobre o caso raro de cache miss
     // simultâneo a indisponibilidade do BCB.
     private static final Duration PTAX_CATALOG_TTL = Duration.ofDays(30);
+    // IBGE — UFs e municípios são federal-fixos (último município criado em
+    // 2013, último estado em 1988). 365d garante zero round-trip ao IBGE no
+    // hot path; soft-TTL de 30d via RAC absorve a alteração rara que possa
+    // entrar via portaria do IBGE.
+    private static final Duration IBGE_TTL = Duration.ofDays(365);
+    // CVM — snapshots completos (corretoras ~150 itens, fundos ~30k itens)
+    // baixados do dados.cvm.gov.br. Publicação mensal. 30d hard absorve o
+    // ciclo; 7d soft via RAC dispara refresh entre janelas.
+    private static final Duration CVM_TTL = Duration.ofDays(30);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
@@ -99,6 +108,10 @@ public class CacheConfig {
     private static final String ISBNS_CACHE = "isbns";
     private static final String PIX_PARTICIPANTES_CACHE = "pixParticipantes";
     private static final String PTAX_CATALOG_CACHE = "ptaxCatalog";
+    private static final String IBGE_UF_CACHE = "ibgeUf";
+    private static final String IBGE_MUNICIPIOS_CACHE = "ibgeMunicipios";
+    private static final String CVM_CORRETORAS_CACHE = "cvmCorretoras";
+    private static final String CVM_FUNDOS_CACHE = "cvmFundos";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -121,7 +134,11 @@ public class CacheConfig {
                 Map.entry(INDICADORES_APS_CACHE, baseConfig().entryTtl(INDICADORES_APS_TTL)),
                 Map.entry(ISBNS_CACHE, baseConfig().entryTtl(ISBNS_TTL)),
                 Map.entry(PIX_PARTICIPANTES_CACHE, baseConfig().entryTtl(PIX_PARTICIPANTES_TTL)),
-                Map.entry(PTAX_CATALOG_CACHE, baseConfig().entryTtl(PTAX_CATALOG_TTL))
+                Map.entry(PTAX_CATALOG_CACHE, baseConfig().entryTtl(PTAX_CATALOG_TTL)),
+                Map.entry(IBGE_UF_CACHE, baseConfig().entryTtl(IBGE_TTL)),
+                Map.entry(IBGE_MUNICIPIOS_CACHE, baseConfig().entryTtl(IBGE_TTL)),
+                Map.entry(CVM_CORRETORAS_CACHE, baseConfig().entryTtl(CVM_TTL)),
+                Map.entry(CVM_FUNDOS_CACHE, baseConfig().entryTtl(CVM_TTL))
         );
 
         return RedisCacheManager.builder(connectionFactory)
