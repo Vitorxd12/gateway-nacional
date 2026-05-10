@@ -50,20 +50,23 @@ public class BcbOlindaCambioClient implements CambioPtaxClientProvider {
             "/olinda/servico/PTAX/versao/v1/odata/CotacaoMoedaDia(moeda=@moeda,dataCotacao=@dataCotacao)";
 
     private final RestClient restClient;
+    private final BcbMoedasCatalogService catalogService;
     private final int maxFallbackDays;
     private final ExecutorService perPairExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     public BcbOlindaCambioClient(RestClient.Builder builder,
                                  @Value("${gateway.cambio.bcb.base-url:https://olinda.bcb.gov.br}") String baseUrl,
-                                 @Value("${gateway.cambio.bcb.max-fallback-days:7}") int maxFallbackDays) {
+                                 @Value("${gateway.cambio.bcb.max-fallback-days:7}") int maxFallbackDays,
+                                 BcbMoedasCatalogService catalogService) {
         this.restClient = builder.baseUrl(baseUrl).build();
         this.maxFallbackDays = maxFallbackDays;
+        this.catalogService = catalogService;
     }
 
     @Override
     @CircuitBreaker(name = "cambioBcbOlindaCB", fallbackMethod = "fallback")
     public List<CambioResponse> fetchPtax(String pares) {
-        List<CambioPair> pairs = CambioPair.parseAll(pares);
+        List<CambioPair> pairs = CambioPair.parseAll(pares, catalogService.supportedCurrencies());
 
         // Primeiro par: descobre a data de referência válida (com retry).
         // A primeira moeda do BCB com PTAX naquela data já garante que a data

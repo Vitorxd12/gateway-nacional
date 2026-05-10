@@ -44,17 +44,20 @@ public class BrasilApiCambioClient implements CambioPtaxClientProvider {
     private static final DateTimeFormatter ISO_DATE = DateTimeFormatter.ISO_LOCAL_DATE;
 
     private final RestClient restClient;
+    private final BcbMoedasCatalogService catalogService;
     private final ExecutorService perPairExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     public BrasilApiCambioClient(RestClient.Builder builder,
-                                 @Value("${gateway.cambio.brasilapi.base-url:https://brasilapi.com.br}") String baseUrl) {
+                                 @Value("${gateway.cambio.brasilapi.base-url:https://brasilapi.com.br}") String baseUrl,
+                                 BcbMoedasCatalogService catalogService) {
         this.restClient = builder.baseUrl(baseUrl).build();
+        this.catalogService = catalogService;
     }
 
     @Override
     @CircuitBreaker(name = "cambioBrasilApiCB", fallbackMethod = "fallback")
     public List<CambioResponse> fetchPtax(String pares) {
-        List<CambioPair> pairs = CambioPair.parseAll(pares);
+        List<CambioPair> pairs = CambioPair.parseAll(pares, catalogService.supportedCurrencies());
         LocalDate referenceDate = lastBusinessDay(LocalDate.now(BR_ZONE));
 
         List<CompletableFuture<CambioResponse>> futures = pairs.stream()
