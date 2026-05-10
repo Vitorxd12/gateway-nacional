@@ -12,6 +12,16 @@ import java.util.Locale;
 /**
  * Façade do módulo CND.
  *
+ * <p><b>ATENÇÃO: Não migrar para
+ * {@link br.com.cernebr.gateway_nacional.config.HedgedExecutor} nem
+ * {@link br.com.cernebr.gateway_nacional.config.RefreshAheadCache}.</b>
+ * Provider de alto custo computacional (sidecar Python + Selenium navegando
+ * formulário JSF da Receita Federal com ViewState e captcha). A cascata
+ * sequencial — neste caso, single-provider — atua como proteção de recursos:
+ * paralelizar dispararia múltiplas sessões Chromium por request e exauriria
+ * a quota anti-bot do gov.br. RAC também não cabe (resultado é
+ * timestamp-dependent, ver explicação abaixo).</p>
+ *
  * <p>Sem {@code @Cacheable} aqui: o resultado de uma CND é um documento
  * datado por instante (a Receita renova diariamente o ViewState e a CND
  * tem código de controle único por emissão). Cachear levaria o ERP a

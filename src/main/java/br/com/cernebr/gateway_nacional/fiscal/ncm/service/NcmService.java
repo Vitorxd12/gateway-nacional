@@ -1,5 +1,6 @@
 package br.com.cernebr.gateway_nacional.fiscal.ncm.service;
 
+import br.com.cernebr.gateway_nacional.config.RefreshAheadCache;
 import br.com.cernebr.gateway_nacional.exception.ResourceNotFoundException;
 import br.com.cernebr.gateway_nacional.exception.ResourceUnavailableException;
 import br.com.cernebr.gateway_nacional.fiscal.ncm.client.BrasilApiNcmClient;
@@ -12,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -45,6 +47,23 @@ import java.util.Optional;
  * <p>Cache TTL is 30 days — the Mercosul nomenclature changes a handful
  * of times per year via Camex resolutions, so a long TTL gives near-zero
  * upstream load without risking stale results.</p>
+ *
+ * <h2>Por que cascata e NÃO {@link br.com.cernebr.gateway_nacional.config.HedgedExecutor}</h2>
+ * <p>A cascata distingue dois desfechos negativos: "todos os providers
+ * confirmaram que o código não existe" (404 definitivo) e "todos falharam"
+ * (503 transitório). Sob hedge esses dois caminhos colapsariam em 503 —
+ * o {@link HedgedExecutor#anyOf} trata qualquer exceção como falha de
+ * tentativa e não tem como propagar a distinção semântica entre {@code Optional.empty()}
+ * (resposta válida do upstream) e {@link ResourceUnavailableException}.
+ * Resultado: clientes deixariam de cachear o 404 e bombardeariam upstreams
+ * para códigos comprovadamente inexistentes.</p>
+ *
+ * <h2>RAC só em {@link #findByCodigo}</h2>
+ * <p>{@link #searchByDescricao} retorna {@code List<NcmResponse>} e
+ * <em>não</em> entra no {@link RefreshAheadCache} — coleções colidem com
+ * a lacuna de default-typing tratada pelo {@code ResilientGenericJacksonSerializer}
+ * e degradariam para miss permanente. Mantém {@code @Cacheable} puro com
+ * o mesmo hard-TTL de 30 dias.</p>
  */
 @Slf4j
 @Service
@@ -53,22 +72,30 @@ public class NcmService {
     private static final String DOMAIN = "ncm";
     private static final String AGGREGATE_PROVIDER = "all-providers";
     static final String NCM_CACHE = "ncm";
+    private static final Duration FIND_BY_CODIGO_SOFT_TTL = Duration.ofDays(7);
 
     static final String METRIC_REQUESTS = "gateway.provider.requests";
     static final String METRIC_LATENCY = "gateway.provider.latency";
 
     private final List<NcmClientProvider> providersInOrder;
     private final MeterRegistry meterRegistry;
+    private final RefreshAheadCache refreshAheadCache;
 
     public NcmService(BrasilApiNcmClient primary,
                       SiscomexNcmClient secondary,
-                      MeterRegistry meterRegistry) {
+                      MeterRegistry meterRegistry,
+                      RefreshAheadCache refreshAheadCache) {
         this.providersInOrder = List.of(primary, secondary);
         this.meterRegistry = meterRegistry;
+        this.refreshAheadCache = refreshAheadCache;
     }
 
-    @Cacheable(cacheNames = NCM_CACHE, key = "'codigo-' + #codigo")
     public NcmResponse findByCodigo(String codigo) {
+        return refreshAheadCache.get(NCM_CACHE, "codigo-" + codigo, FIND_BY_CODIGO_SOFT_TTL,
+                () -> loadByCodigoFromCascade(codigo));
+    }
+
+    private NcmResponse loadByCodigoFromCascade(String codigo) {
         boolean anyProviderUnavailable = false;
         Throwable lastFailure = null;
 
