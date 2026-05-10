@@ -1,74 +1,75 @@
 package br.com.cernebr.gateway_nacional.cadastral.cnpj.service;
 
 import br.com.cernebr.gateway_nacional.cadastral.cnpj.client.BrasilApiClient;
-import br.com.cernebr.gateway_nacional.cadastral.cnpj.client.CnpjClientProvider;
 import br.com.cernebr.gateway_nacional.cadastral.cnpj.client.MinhaReceitaClient;
 import br.com.cernebr.gateway_nacional.cadastral.cnpj.client.ReceitaWsClient;
 import br.com.cernebr.gateway_nacional.cadastral.cnpj.dto.CnpjResponse;
-import br.com.cernebr.gateway_nacional.exception.ResourceUnavailableException;
-import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Timer;
+import br.com.cernebr.gateway_nacional.config.HedgedExecutor;
+import br.com.cernebr.gateway_nacional.config.HedgedExecutor.NamedSupplier;
+import br.com.cernebr.gateway_nacional.config.RefreshAheadCache;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.List;
-import java.util.Locale;
 
 /**
- * Orchestrates the cascade fallback across multiple CNPJ providers.
- * Order: BrasilAPI → ReceitaWS → MinhaReceita. Metrics shape mirrors
- * {@code CepService} so dashboards can stay domain-agnostic.
+ * Resolve um CNPJ combinando dois padrões:
+ * <ol>
+ *   <li>{@link RefreshAheadCache} aplica soft-TTL/hard-TTL: o cache "cnpjs"
+ *       tem hard-TTL de 24h (configurado em {@code CacheConfig}); o soft-TTL
+ *       de 6h definido aqui dispara refresh assíncrono em background, sem
+ *       bloquear a request — latência percebida pelo cliente fica constante
+ *       mesmo na borda do TTL.</li>
+ *   <li>{@link HedgedExecutor} dispara BrasilAPI, ReceitaWS e MinhaReceita
+ *       em paralelo no caminho de loader; vence o primeiro com sucesso.</li>
+ * </ol>
+ *
+ * <p>Por que 6h de soft-TTL no cenário B2B: dados cadastrais de PJ mudam com
+ * baixa frequência, mas as 18h restantes do hard-TTL ainda asseguram que uma
+ * mudança de razão social/situação cadastral propague no mesmo dia útil.
+ * Os primeiros 6h ficam silenciosos — sem refresh para chave fria de uso
+ * pontual; chaves quentes (clientes consultando o mesmo CNPJ recorrentemente
+ * ao longo do dia) entram em refresh-ahead na primeira leitura após 6h.</p>
+ *
+ * <p>Métricas de provider são emitidas pelo {@link HedgedExecutor}; este
+ * service não duplica instrumentação.</p>
  */
 @Slf4j
 @Service
 public class CnpjService {
 
     private static final String DOMAIN = "cnpj";
-    private static final String AGGREGATE_PROVIDER = "all-providers";
+    private static final String CACHE_NAME = "cnpjs";
+    private static final Duration SOFT_TTL = Duration.ofHours(6);
 
-    static final String METRIC_REQUESTS = "gateway.provider.requests";
-    static final String METRIC_LATENCY = "gateway.provider.latency";
+    private final BrasilApiClient brasilApi;
+    private final ReceitaWsClient receitaWs;
+    private final MinhaReceitaClient minhaReceita;
+    private final HedgedExecutor hedgedExecutor;
+    private final RefreshAheadCache refreshAheadCache;
 
-    private final List<CnpjClientProvider> providersInOrder;
-    private final MeterRegistry meterRegistry;
-
-    public CnpjService(BrasilApiClient primary,
-                       ReceitaWsClient secondary,
-                       MinhaReceitaClient tertiary,
-                       MeterRegistry meterRegistry) {
-        this.providersInOrder = List.of(primary, secondary, tertiary);
-        this.meterRegistry = meterRegistry;
+    public CnpjService(BrasilApiClient brasilApi,
+                       ReceitaWsClient receitaWs,
+                       MinhaReceitaClient minhaReceita,
+                       HedgedExecutor hedgedExecutor,
+                       RefreshAheadCache refreshAheadCache) {
+        this.brasilApi = brasilApi;
+        this.receitaWs = receitaWs;
+        this.minhaReceita = minhaReceita;
+        this.hedgedExecutor = hedgedExecutor;
+        this.refreshAheadCache = refreshAheadCache;
     }
 
-    @Cacheable(cacheNames = "cnpjs", key = "#cnpj")
     public CnpjResponse findByCnpj(String cnpj) {
-        for (CnpjClientProvider provider : providersInOrder) {
-            Timer.Sample sample = Timer.start(meterRegistry);
-            try {
-                CnpjResponse response = provider.fetch(cnpj);
-                recordOutcome(provider.providerName(), "success", sample);
-                log.info("CNPJ {} resolved by provider={}", cnpj, provider.providerName());
-                return response;
-            } catch (Exception ex) {
-                recordOutcome(provider.providerName(), "failure", sample);
-                log.warn("Provider {} failed for cnpj={} ({}). Cascading to next provider.",
-                        provider.providerName(), cnpj, ex.getMessage());
-            }
-        }
-        throw new ResourceUnavailableException(AGGREGATE_PROVIDER,
-                "Todos os provedores de CNPJ falharam após o fallback em cascata.");
+        return refreshAheadCache.get(CACHE_NAME, cnpj, SOFT_TTL, () -> loadFromProviders(cnpj));
     }
 
-    private void recordOutcome(String providerName, String outcome, Timer.Sample sample) {
-        String providerTag = providerName.toLowerCase(Locale.ROOT);
-        sample.stop(Timer.builder(METRIC_LATENCY)
-                .tag("domain", DOMAIN)
-                .tag("provider", providerTag)
-                .register(meterRegistry));
-        meterRegistry.counter(METRIC_REQUESTS,
-                "domain", DOMAIN,
-                "provider", providerTag,
-                "outcome", outcome).increment();
+    private CnpjResponse loadFromProviders(String cnpj) {
+        return hedgedExecutor.anyOf(DOMAIN, List.of(
+                new NamedSupplier<>(brasilApi.providerName(),    () -> brasilApi.fetch(cnpj)),
+                new NamedSupplier<>(receitaWs.providerName(),    () -> receitaWs.fetch(cnpj)),
+                new NamedSupplier<>(minhaReceita.providerName(), () -> minhaReceita.fetch(cnpj))
+        ));
     }
 }
