@@ -1,5 +1,6 @@
 package br.com.cernebr.gateway_nacional.exception;
 
+import br.com.cernebr.gateway_nacional.cadastral.isbn.exception.IsbnInvalidoException;
 import br.com.cernebr.gateway_nacional.financeiro.boletos.exception.BoletoInvalidoException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolation;
@@ -198,6 +199,21 @@ public class GlobalExceptionHandler {
 
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
         problem.setTitle("Linha digitável inválida");
+        problem.setType(TYPE_VALIDATION);
+        problem.setInstance(URI.create(request.getRequestURI()));
+        problem.setProperty("timestamp", OffsetDateTime.now());
+
+        return ResponseEntity.badRequest().body(problem);
+    }
+
+    @ExceptionHandler(IsbnInvalidoException.class)
+    public ResponseEntity<ProblemDetail> handleIsbnInvalido(IsbnInvalidoException ex,
+                                                            HttpServletRequest request) {
+        log.info("ISBN inválido em {} {}: {}",
+                request.getMethod(), request.getRequestURI(), ex.getMessage());
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
+        problem.setTitle("ISBN inválido");
         problem.setType(TYPE_VALIDATION);
         problem.setInstance(URI.create(request.getRequestURI()));
         problem.setProperty("timestamp", OffsetDateTime.now());

@@ -64,6 +64,12 @@ public class CacheConfig {
     // próxima portaria. 30 dias dá folga para refresh sem refletir um
     // valor antigo após eventual reabertura administrativa de quadrimestre.
     private static final Duration INDICADORES_APS_TTL = Duration.ofDays(30);
+    // ISBNs — uma vez publicado, o livro é "frozen": metadados (título, autor,
+    // capa, ano de publicação) não mudam. Correções pontuais de catalogação
+    // existem mas são raras. 365d é o teto razoável para matar tráfego upstream
+    // sem degradar a percepção de frescor; o RAC com soft-TTL de 90d garante
+    // refresh oportunista para títulos quentes.
+    private static final Duration ISBNS_TTL = Duration.ofDays(365);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
@@ -79,6 +85,7 @@ public class CacheConfig {
     private static final String SANCOES_CACHE = "sancoes";
     private static final String PROCESSOS_CACHE = "processos";
     private static final String INDICADORES_APS_CACHE = "indicadoresAps";
+    private static final String ISBNS_CACHE = "isbns";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -98,7 +105,8 @@ public class CacheConfig {
                 Map.entry(CAMBIO_CACHE, baseConfig().entryTtl(CAMBIO_TTL)),
                 Map.entry(SANCOES_CACHE, baseConfig().entryTtl(SANCOES_TTL)),
                 Map.entry(PROCESSOS_CACHE, baseConfig().entryTtl(PROCESSOS_TTL)),
-                Map.entry(INDICADORES_APS_CACHE, baseConfig().entryTtl(INDICADORES_APS_TTL))
+                Map.entry(INDICADORES_APS_CACHE, baseConfig().entryTtl(INDICADORES_APS_TTL)),
+                Map.entry(ISBNS_CACHE, baseConfig().entryTtl(ISBNS_TTL))
         );
 
         return RedisCacheManager.builder(connectionFactory)

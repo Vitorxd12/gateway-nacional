@@ -72,6 +72,26 @@ gateway:
   bancos:
     brasilapi:
       base-url: https://brasilapi.com.br
+  isbn:
+    # Consulta de dados bibliográficos por ISBN-10/13. Hedge entre 5 fontes:
+    # BrasilAPI (primário, RULE B — já consolida internamente os 4 originais);
+    # CBL (Câmara Brasileira do Livro via Azure Cognitive Search), Google Books,
+    # Mercado Editorial (BR-only), Open Library (cobertura mundial e capa).
+    # Cache 365d porque livro publicado é "frozen"; soft-TTL 90d via RAC.
+    brasilapi:
+      base-url: https://brasilapi.com.br
+    cbl:
+      base-url: https://isbn-search-br.search.windows.net
+      # API key pública do site oficial da CBL (mesma usada pela BrasilAPI).
+      # Vazia → o client decodifica o default base64 embutido. Sobrescrever
+      # via GATEWAY_ISBN_CBL_API_KEY caso a CBL rotacione a chave.
+      api-key: ${GATEWAY_ISBN_CBL_API_KEY:}
+    google-books:
+      base-url: https://www.googleapis.com/books/v1
+    mercado-editorial:
+      base-url: https://api.mercadoeditorial.org/api/v1.2
+    open-library:
+      base-url: https://openlibrary.org
   cambio:
     # AwesomeAPI — endpoint público (sem chave) de cotações em tempo (quase)
     # real. Aceita múltiplos pares por vírgula (USD-BRL,EUR-BRL,BTC-BRL).
@@ -317,6 +337,20 @@ resilience4j:
         baseConfig: default
       sisabScraperCB:
         baseConfig: default
+      # ISBN providers — BrasilAPI primário + 4 fontes originais (CBL via Azure
+      # Search, Google Books, Mercado Editorial, Open Library). Cada um isolado
+      # para que indisponibilidade de um (CBL costuma flutuar) não contamine os
+      # demais sob hedge.
+      isbnBrasilApiCB:
+        baseConfig: default
+      isbnCblCB:
+        baseConfig: default
+      isbnGoogleBooksCB:
+        baseConfig: default
+      isbnMercadoEditorialCB:
+        baseConfig: default
+      isbnOpenLibraryCB:
+        baseConfig: default
 
   timelimiter:
     configs:
@@ -432,6 +466,19 @@ resilience4j:
       sisabScraperCB:
         baseConfig: default
         timeoutDuration: 120s
+      # ISBN providers — defaults são suficientes (5s read no RestClient + 3s
+      # logical timeout daqui). Open Library e Google Books costumam responder
+      # em <1s; CBL via Azure Search pode picar até 2s sob carga.
+      isbnBrasilApiCB:
+        baseConfig: default
+      isbnCblCB:
+        baseConfig: default
+      isbnGoogleBooksCB:
+        baseConfig: default
+      isbnMercadoEditorialCB:
+        baseConfig: default
+      isbnOpenLibraryCB:
+        baseConfig: default
 
 logging:
   level:
