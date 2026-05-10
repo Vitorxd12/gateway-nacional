@@ -1,5 +1,6 @@
 package br.com.cernebr.gateway_nacional.financeiro.bancos.service;
 
+import br.com.cernebr.gateway_nacional.config.RefreshAheadCache;
 import br.com.cernebr.gateway_nacional.financeiro.bancos.client.BancoClientProvider;
 import br.com.cernebr.gateway_nacional.financeiro.bancos.client.BrasilApiBancoClient;
 import br.com.cernebr.gateway_nacional.financeiro.bancos.client.LocalBacenBancoClient;
@@ -11,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Function;
@@ -22,6 +24,20 @@ import java.util.function.Function;
  * <p>Cache is aggressive — bank registrations are highly stable. The full
  * list shares cache name with single-bank lookups but uses the literal key
  * {@code "all"} to avoid collision with any 3-digit COMPE code.</p>
+ *
+ * <h2>Por que cascata e NÃO {@link br.com.cernebr.gateway_nacional.config.HedgedExecutor}</h2>
+ * <p>O segundo provider é um dump in-memory que sob hedge venceria todas as
+ * corridas, e o BrasilAPI nunca seria consultado para refrescar o catálogo.
+ * A cascata sequencial preserva a intenção: BrasilAPI primeiro; o local só
+ * é o paraquedas quando o REST cair.</p>
+ *
+ * <h2>RAC só em {@link #findByCodigo}</h2>
+ * <p>{@link #findAll} retorna {@code List<BancoResponse>} e <em>não</em> usa
+ * {@link RefreshAheadCache} — wrapping de coleções colidiria com a lacuna
+ * de default-typing tratada pelo {@code ResilientGenericJacksonSerializer}
+ * e degradaria a chave {@code "all"} para miss permanente. Mantém
+ * {@code @Cacheable} puro com hard-TTL de 30 dias, idêntico ao
+ * comportamento anterior.</p>
  */
 @Slf4j
 @Service
@@ -29,28 +45,33 @@ public class BancoService {
 
     private static final String DOMAIN = "bancos";
     private static final String AGGREGATE_PROVIDER = "all-providers";
+    private static final String CACHE_NAME = "bancos";
+    private static final Duration FIND_BY_CODIGO_SOFT_TTL = Duration.ofDays(7);
 
     static final String METRIC_REQUESTS = "gateway.provider.requests";
     static final String METRIC_LATENCY = "gateway.provider.latency";
 
     private final List<BancoClientProvider> providersInOrder;
     private final MeterRegistry meterRegistry;
+    private final RefreshAheadCache refreshAheadCache;
 
     public BancoService(BrasilApiBancoClient primary,
                         LocalBacenBancoClient secondary,
-                        MeterRegistry meterRegistry) {
+                        MeterRegistry meterRegistry,
+                        RefreshAheadCache refreshAheadCache) {
         this.providersInOrder = List.of(primary, secondary);
         this.meterRegistry = meterRegistry;
+        this.refreshAheadCache = refreshAheadCache;
     }
 
-    @Cacheable(cacheNames = "bancos", key = "'all'")
+    @Cacheable(cacheNames = CACHE_NAME, key = "'all'")
     public List<BancoResponse> findAll() {
         return cascade(BancoClientProvider::fetchAll, "fetchAll", "n/a");
     }
 
-    @Cacheable(cacheNames = "bancos", key = "#codigo")
     public BancoResponse findByCodigo(String codigo) {
-        return cascade(provider -> provider.fetchByCodigo(codigo), "fetchByCodigo", codigo);
+        return refreshAheadCache.get(CACHE_NAME, codigo, FIND_BY_CODIGO_SOFT_TTL,
+                () -> cascade(provider -> provider.fetchByCodigo(codigo), "fetchByCodigo", codigo));
     }
 
     /**
