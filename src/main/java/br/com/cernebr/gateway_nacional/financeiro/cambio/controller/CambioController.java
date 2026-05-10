@@ -26,7 +26,7 @@ import java.util.List;
 @RequestMapping("/api/v1/financeiro/cambio")
 @Tag(
         name = "Câmbio",
-        description = "Cotação de moedas em tempo (quase) real consumida da AwesomeAPI, com cache estratégico de 3 minutos para preservar a quota upstream."
+        description = "Cotação de moedas com prioridade para PTAX oficial (Banco Central). Cascata em duas camadas: PTAX hedge entre BrasilAPI e BCB OLINDA — fallback transparente para AwesomeAPI quando o par não é PTAX-elegível (cripto, cross-currency sem BRL) ou ambos providers oficiais estão indisponíveis."
 )
 public class CambioController {
 
@@ -38,22 +38,27 @@ public class CambioController {
 
     @GetMapping(value = "/{pares}", produces = MediaType.APPLICATION_JSON_VALUE)
     @Operation(
-            summary = "Consultar a cotação atual de um ou mais pares de moedas",
+            summary = "Consultar a cotação atual de um ou mais pares de moedas — PTAX oficial quando disponível",
             description = """
-                    Retorna a cotação mais recente publicada pela AwesomeAPI para os pares informados. \
-                    Aceita uma lista separada por vírgula no formato `MOEDA_ORIGEM-MOEDA_DESTINO`, por exemplo:
+                    Retorna a cotação mais recente para os pares informados, com **prioridade para o PTAX oficial \
+                    do Banco Central** (regulatório, fiscal, contábil) e fallback transparente para AwesomeAPI \
+                    (spot real-time comercial) quando o PTAX não pode atender.
 
-                    - `USD-BRL` — Dólar americano em Real
-                    - `USD-BRL,EUR-BRL` — múltiplos pares em uma única requisição
-                    - `BTC-BRL,ETH-BRL,USD-BRL` — combina criptomoedas e moedas fiat
+                    **Aceita uma lista separada por vírgula no formato `MOEDA_ORIGEM-MOEDA_DESTINO`:**
 
-                    A resposta é uma lista, mesmo quando apenas um par é solicitado.
+                    - `USD-BRL` — Dólar americano em Real → resolvido por **PTAX**
+                    - `USD-BRL,EUR-BRL` — múltiplos pares em uma única requisição → **PTAX** para ambos
+                    - `BTC-BRL,USD-BRL` — combina cripto e fiat → **AwesomeAPI** (PTAX não cobre cripto)
+                    - `USD-EUR` — cross-currency sem BRL → **AwesomeAPI** (PTAX só publica vs BRL)
 
-                    **Cache:** as respostas ficam cacheadas por 3 minutos no Redis usando uma chave \
-                    normalizada (uppercase + ordem alfabética), de modo que `USD-BRL,EUR-BRL` e \
-                    `eur-brl,usd-brl` compartilham o mesmo registro. Isso colapsa rajadas de \
-                    requisições simultâneas (dashboards, ERPs) em uma única chamada upstream a \
-                    cada 3 minutos por combinação de pares."""
+                    **Como saber qual fonte respondeu:** PTAX é fixing diário do BCB, então `dataHoraAtualizacao` \
+                    reflete a data da publicação oficial (geralmente D-1) e `variacao` vem `null` (PTAX não \
+                    publica variação intra-dia). Respostas via AwesomeAPI vêm com timestamp atual e `variacao` preenchida.
+
+                    **Cobertura PTAX (BCB):** USD, EUR, GBP, JPY, CHF, CAD, AUD, DKK, NOK, SEK, ARS, MXN, TRY, ZAR, CNY, HKD.
+
+                    **Cache:** chave normalizada (uppercase + ordem alfabética estável), TTL 3 minutos. \
+                    `USD-BRL,EUR-BRL` e `eur-brl,usd-brl` compartilham o mesmo registro Redis."""
     )
     @ApiResponses({
             @ApiResponse(
@@ -68,12 +73,12 @@ public class CambioController {
             ),
             @ApiResponse(
                     responseCode = "404",
-                    description = "Nenhum dos pares informados foi localizado na AwesomeAPI",
+                    description = "Nenhum dos pares informados foi localizado em nenhum tier",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))
             ),
             @ApiResponse(
                     responseCode = "503",
-                    description = "AwesomeAPI indisponível (Circuit Breaker aberto ou erro de rede)",
+                    description = "Tanto PTAX (BrasilAPI/BCB OLINDA) quanto AwesomeAPI estão indisponíveis",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))
             )
     })
