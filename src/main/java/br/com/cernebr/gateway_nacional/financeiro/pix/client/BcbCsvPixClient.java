@@ -12,14 +12,15 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Provider FALLBACK de PIX participantes — CSV oficial do Banco Central:
@@ -54,11 +55,37 @@ public class BcbCsvPixClient implements PixParticipantesClientProvider {
     private static final ZoneId BR_ZONE = ZoneId.of("America/Sao_Paulo");
 
     private static final DateTimeFormatter FILENAME_DATE = DateTimeFormatter.ofPattern("yyyyMMdd");
-    private static final DateTimeFormatter BCB_DATETIME = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
-    private static final DateTimeFormatter BCB_DATE_ONLY = DateTimeFormatter.ofPattern("dd/MM/yyyy");
 
     private static final String CSV_PATH_TEMPLATE =
             "/content/estabilidadefinanceira/participantes_pix/lista-participantes-instituicoes-em-adesao-pix-{date}.csv";
+
+    /**
+     * Headers exigidos do CSV (após normalização: lowercase + sem espaços).
+     * Validados via inclusão de conjunto — BCB pode acrescentar colunas, mas
+     * estes 4 precisam estar presentes ou rejeitamos com {@code ResourceUnavailableException}.
+     * Lista herdada do {@code services/pix/participants.js} da BrasilAPI:
+     * note o typo "spi" em {@code tipodeparticipaçãonospi} — é assim mesmo no
+     * CSV do BCB (texto truncado pelo header generator do gov.br).
+     */
+    private static final Set<String> EXPECTED_HEADERS = Set.of(
+            "ispb",
+            "nomereduzido",
+            "modalidadedeparticipaçãonopix",
+            "tipodeparticipaçãonospi"
+    );
+
+    /**
+     * Mapeamento canônico das colunas do CSV BCB (descoberto via parsing real
+     * pela BrasilAPI). O CSV tem &gt;9 colunas; usamos apenas estas 4 fixas
+     * pelos índices, igual {@code services/pix/participants.js}.
+     */
+    private static final int COL_NOME = 1;
+    private static final int COL_ISPB = 2;
+    private static final int COL_TIPO_PARTICIPACAO = 6;
+    private static final int COL_MODALIDADE_PARTICIPACAO = 8;
+    private static final int MIN_REQUIRED_COLS = 9;
+
+    private static final Pattern CHARSET_PATTERN = Pattern.compile("(?i)charset=([^;\\s]+)");
 
     private final RestClient restClient;
     private final int maxFallbackDays;
@@ -113,43 +140,71 @@ public class BcbCsvPixClient implements PixParticipantesClientProvider {
     }
 
     private String downloadCsv(LocalDate date) {
-        byte[] body = restClient.get()
+        var entity = restClient.get()
                 .uri(CSV_PATH_TEMPLATE, date.format(FILENAME_DATE))
                 .accept(MediaType.TEXT_PLAIN, MediaType.APPLICATION_OCTET_STREAM)
                 .retrieve()
-                .body(byte[].class);
+                .toEntity(byte[].class);
 
+        byte[] body = entity.getBody();
         if (body == null || body.length == 0) {
             return null;
         }
-        // BCB serve com encoding Windows-1252 (Latin-1 estendido) sem
-        // declaração consistente. Decodificar explicitamente preserva
-        // acentos em "Operação", "São", "Crédito" etc.
-        return new String(body, Charset.forName("windows-1252"));
+
+        // Lê o charset do Content-Type quando declarado (BrasilAPI faz o
+        // mesmo); fallback latin1 quando ausente. Latin-1 é suficiente para
+        // o conteúdo do CSV do BCB (acentos em "Operação", "São", "Crédito").
+        Charset charset = StandardCharsets.ISO_8859_1;
+        var contentType = entity.getHeaders().getFirst("Content-Type");
+        if (contentType != null) {
+            var matcher = CHARSET_PATTERN.matcher(contentType);
+            if (matcher.find()) {
+                String declared = matcher.group(1).toLowerCase();
+                try {
+                    charset = "utf-8".equals(declared)
+                            ? StandardCharsets.UTF_8
+                            : StandardCharsets.ISO_8859_1;
+                } catch (Exception ignored) {
+                    // mantém o fallback ISO-8859-1
+                }
+            }
+        }
+        return new String(body, charset);
     }
 
     /**
-     * Formato esperado:
+     * Estrutura real do CSV do BCB (descoberto via {@code services/pix/participants.js}
+     * da BrasilAPI):
      * <pre>
-     * ISPB;Nome;Nome Reduzido;Modalidade Participação;Tipo de Participação;Início Operação
-     * 00000000;BANCO DO BRASIL S.A.;BCO DO BRASIL;PDCT;DRCT;03/11/2020 09:30
+     * Linha 1: "Lista de participantes ativos do Pix"   ← TÍTULO (descartado)
+     * Linha 2: ISPB;Nome;Nome Reduzido;...;Tipo;...;Modalidade;...   ← HEADER (validado)
+     * Linha 3+: dados                                                  ← parseados
      * </pre>
-     * Linhas vazias e header são puladas. Linha mal-formada é ignorada com
-     * log em debug — o CSV inteiro do BCB não deve falhar por uma linha
-     * corrompida (~1k linhas no total).
+     *
+     * <p>O header tem mais de 9 colunas — só validamos a presença das 4
+     * essenciais ({@link #EXPECTED_HEADERS}) para não quebrar quando o BCB
+     * adicionar campos novos. Se um header essencial sumir, lançamos
+     * {@code ResourceUnavailableException} ao invés de devolver dados
+     * embaralhados — degradação ruidosa &gt; degradação silenciosa.</p>
+     *
+     * <p>Filtragem de linhas: descartamos linhas em branco e linhas onde
+     * a primeira coluna é vazia (espelha o {@code .filter(([ispb]) => ispb)}
+     * da BrasilAPI — o nome de variável "ispb" lá é enganoso, na prática
+     * filtra a coluna 0).</p>
      */
     private PixParticipantesResponse parseCsv(String csv, LocalDate dataReferencia) {
-        List<PixParticipanteResponse> participantes = new ArrayList<>(1024);
         String[] lines = csv.split("\\r?\\n");
-        boolean headerSeen = false;
+        if (lines.length < 3) {
+            throw new ResourceUnavailableException(PROVIDER_NAME,
+                    "BCB CSV de " + dataReferencia + " com menos de 3 linhas — formato inesperado.");
+        }
 
-        for (String line : lines) {
-            if (line.isBlank()) continue;
-            if (!headerSeen) {
-                headerSeen = true;
-                continue;
-            }
-            PixParticipanteResponse parsed = parseLine(line);
+        // Linha 0 = título; linha 1 = header; linhas 2+ = dados.
+        validateHeader(lines[1], dataReferencia);
+
+        List<PixParticipanteResponse> participantes = new ArrayList<>(1024);
+        for (int i = 2; i < lines.length; i++) {
+            PixParticipanteResponse parsed = parseLine(lines[i]);
             if (parsed != null) {
                 participantes.add(parsed);
             }
@@ -168,36 +223,57 @@ public class BcbCsvPixClient implements PixParticipantesClientProvider {
         );
     }
 
+    private static void validateHeader(String headerLine, LocalDate dataReferencia) {
+        String[] rawCols = headerLine.split(";", -1);
+        Set<String> normalized = new HashSet<>(rawCols.length);
+        for (String col : rawCols) {
+            // Espelha {@code header.toLowerCase().replace(/ /g, '')} da BrasilAPI.
+            normalized.add(col.toLowerCase().replace(" ", ""));
+        }
+        if (!normalized.containsAll(EXPECTED_HEADERS)) {
+            throw new ResourceUnavailableException(PROVIDER_NAME,
+                    "BCB CSV de " + dataReferencia + " com header alterado — esperados " +
+                            EXPECTED_HEADERS + ", recebidos " + normalized);
+        }
+    }
+
+    /**
+     * Mapeamento canônico (BrasilAPI {@code services/pix/participants.js:76-85}):
+     * <ul>
+     *   <li>{@code ispb} ← {@code data[2]}</li>
+     *   <li>{@code nome} ← {@code data[1]}</li>
+     *   <li>{@code nome_reduzido} ← {@code data[1]} (alias intencional do nome — o
+     *       BCB não publica essa coluna em separado)</li>
+     *   <li>{@code tipo_participacao} ← {@code data[6]}</li>
+     *   <li>{@code modalidade_participacao} ← {@code data[8]}</li>
+     *   <li>{@code inicio_operacao} ← {@code null} (não consta no CSV)</li>
+     * </ul>
+     */
     private PixParticipanteResponse parseLine(String line) {
+        if (line.isBlank()) return null;
         String[] cols = line.split(";", -1);
-        if (cols.length < 6) {
-            log.debug("BCB CSV line skipped (cols={}): {}", cols.length, line);
+        if (cols.length < MIN_REQUIRED_COLS) {
+            log.debug("BCB CSV line skipped (cols={} < {}): {}", cols.length, MIN_REQUIRED_COLS, line);
+            return null;
+        }
+        // Filtragem espelhada do .filter(([ispb]) => ispb) — descarta linhas
+        // sem conteúdo na primeira coluna.
+        if (cols[0].isBlank()) {
             return null;
         }
         try {
+            String nome = trim(cols[COL_NOME]);
             return new PixParticipanteResponse(
-                    trim(cols[0]),
-                    trim(cols[1]),
-                    trim(cols[2]),
-                    trim(cols[3]),
-                    trim(cols[4]),
-                    parseInicioOperacao(trim(cols[5]))
+                    trim(cols[COL_ISPB]),
+                    nome,
+                    nome,
+                    trim(cols[COL_MODALIDADE_PARTICIPACAO]),
+                    trim(cols[COL_TIPO_PARTICIPACAO]),
+                    null
             );
         } catch (RuntimeException ex) {
             log.debug("BCB CSV line failed to parse ({}): {}", ex.getMessage(), line);
             return null;
-        }
-    }
-
-    private static OffsetDateTime parseInicioOperacao(String raw) {
-        if (raw == null || raw.isBlank()) return null;
-        try {
-            LocalDateTime ldt = LocalDateTime.parse(raw, BCB_DATETIME);
-            return ldt.atZone(BR_ZONE).toOffsetDateTime();
-        } catch (DateTimeParseException ex) {
-            // Algumas linhas legadas vêm sem hora — tenta só a data.
-            LocalDate ld = LocalDate.parse(raw, BCB_DATE_ONLY);
-            return ld.atStartOfDay(BR_ZONE).toOffsetDateTime();
         }
     }
 

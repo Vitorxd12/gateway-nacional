@@ -319,6 +319,11 @@ resilience4j:
         baseConfig: default
       cambioBcbOlindaCB:
         baseConfig: default
+      # Catálogo de moedas BCB (consultado por todo fetchPtax para validar
+      # pares). CB isolado para que indisponibilidade do /Moedas não derrube
+      # CBs dos providers de cotação — o fallback embutido cobre miss simultâneo.
+      cambioMoedasCatalogCB:
+        baseConfig: default
       awesomeApiCambioCB:
         baseConfig: default
       # Jurídico providers
@@ -442,6 +447,9 @@ resilience4j:
       cambioBcbOlindaCB:
         baseConfig: default
         timeoutDuration: 15s
+      # Catálogo de moedas — chamada simples e leve, default 3s sobra.
+      cambioMoedasCatalogCB:
+        baseConfig: default
       awesomeApiCambioCB:
         baseConfig: default
       # Jurídico providers — DataJud e CGU CEIS rodam queries pesadas em

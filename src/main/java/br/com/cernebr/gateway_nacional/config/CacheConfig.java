@@ -75,6 +75,12 @@ public class CacheConfig {
     // dispara refresh oportunista (cobre o cenário "li às 8h, BCB publicou
     // novo às 14h, próximo cliente após 14h pega versão fresca em background").
     private static final Duration PIX_PARTICIPANTES_TTL = Duration.ofHours(24);
+    // Catálogo de moedas PTAX (BCB /Moedas) — o BCB altera o conjunto raras
+    // vezes por ano, e cada chamada de câmbio consulta esse cache para validar
+    // pares antes de bater no PTAX. 30d garante zero round-trip a /Moedas no
+    // caminho crítico; o fallback embutido cobre o caso raro de cache miss
+    // simultâneo a indisponibilidade do BCB.
+    private static final Duration PTAX_CATALOG_TTL = Duration.ofDays(30);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
@@ -92,6 +98,7 @@ public class CacheConfig {
     private static final String INDICADORES_APS_CACHE = "indicadoresAps";
     private static final String ISBNS_CACHE = "isbns";
     private static final String PIX_PARTICIPANTES_CACHE = "pixParticipantes";
+    private static final String PTAX_CATALOG_CACHE = "ptaxCatalog";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -113,7 +120,8 @@ public class CacheConfig {
                 Map.entry(PROCESSOS_CACHE, baseConfig().entryTtl(PROCESSOS_TTL)),
                 Map.entry(INDICADORES_APS_CACHE, baseConfig().entryTtl(INDICADORES_APS_TTL)),
                 Map.entry(ISBNS_CACHE, baseConfig().entryTtl(ISBNS_TTL)),
-                Map.entry(PIX_PARTICIPANTES_CACHE, baseConfig().entryTtl(PIX_PARTICIPANTES_TTL))
+                Map.entry(PIX_PARTICIPANTES_CACHE, baseConfig().entryTtl(PIX_PARTICIPANTES_TTL)),
+                Map.entry(PTAX_CATALOG_CACHE, baseConfig().entryTtl(PTAX_CATALOG_TTL))
         );
 
         return RedisCacheManager.builder(connectionFactory)

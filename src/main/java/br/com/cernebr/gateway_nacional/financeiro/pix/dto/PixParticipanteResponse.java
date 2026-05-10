@@ -9,11 +9,11 @@ import java.time.OffsetDateTime;
 /**
  * Instituição participante do arranjo PIX (BACEN).
  *
- * <p>Shape unificado entre os dois providers: a {@code BrasilAPI} entrega
- * exatamente este formato JSON; o cliente do CSV oficial do BCB normaliza
- * a data brasileira ({@code dd/MM/yyyy HH:mm}) para {@link OffsetDateTime}
- * em {@code America/Sao_Paulo}, mantendo o offset explícito para o
- * consumidor não precisar saber o fuso.</p>
+ * <p>Shape unificado entre os dois providers. Ambos hoje retornam
+ * {@code inicio_operacao} como {@code null} — o CSV oficial do BCB não
+ * publica essa coluna, e a BrasilAPI propaga {@code null}. O campo é
+ * mantido para compatibilidade com a API pública da BrasilAPI e fica
+ * automaticamente omitido do JSON via {@link com.fasterxml.jackson.annotation.JsonInclude#NON_NULL}.</p>
  *
  * <p>{@code modalidadeParticipacao}: {@code PDCT} (direto) | {@code PIDR}
  * (indireto). {@code tipoParticipacao}: {@code DRCT} (titular) | {@code IDRT}
