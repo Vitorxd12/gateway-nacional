@@ -17,6 +17,16 @@ import java.util.Locale;
 
 /**
  * Orchestrates the cascade fallback for vehicle lookup by license plate.
+ *
+ * <p><b>ATENÇÃO: Não migrar para
+ * {@link br.com.cernebr.gateway_nacional.config.HedgedExecutor} nem
+ * {@link br.com.cernebr.gateway_nacional.config.RefreshAheadCache}.</b>
+ * O terceiro provider é um scraper {@code FlareSolverr} contra placafipe.com.
+ * Sob hedge, toda request invocaria o scraper mesmo que WDApi/Keplaca já
+ * tivessem respondido — esgotaria a janela anti-bot do upstream e o pool
+ * de Chromium. A cascata sequencial preserva o scraper como último recurso.
+ * Mantenha {@code @Cacheable} puro com TTL longo (placas raramente mudam).</p>
+ *
  * Order: <b>WDApi → Keplaca → PlacaFipe scraper</b>.
  *
  * <p>The third provider is the safety net that turns the gateway into a

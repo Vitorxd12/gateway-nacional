@@ -29,6 +29,16 @@ import java.util.concurrent.Executors;
  * fan-out run concurrently on a single virtual-thread executor, so total
  * wall-time tracks the slowest single provider rather than the sum.
  *
+ * <p><b>ATENÇÃO: Não migrar para
+ * {@link br.com.cernebr.gateway_nacional.config.HedgedExecutor} nem
+ * {@link br.com.cernebr.gateway_nacional.config.RefreshAheadCache}.</b>
+ * Orquestrador de múltiplos scrapers Selenium/FlareSolverr (OLX, MobiAuto,
+ * etc.) e dos services pesados {@link PlacaService}/{@link FipeService}.
+ * O fan-out interno em virtual threads já paraleliza scrapers independentes;
+ * adicionar HedgedExecutor disparia replicação dos scrapers, e RAC duplicaria
+ * o trabalho em background. A composição atual é a forma estável de proteger
+ * a infraestrutura sem perder concorrência.</p>
+ *
  * <p><b>FIPE auto-discovery</b> — when the placa cascade resolves through
  * the {@code PlacaFipeScraperClient}, the {@link PlacaResponse} carries the
  * {@code codigoFipe} associated with that placa. This service detects the

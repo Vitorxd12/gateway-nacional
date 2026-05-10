@@ -18,6 +18,15 @@ import java.util.Locale;
 /**
  * Orchestrates the cascade fallback for FIPE vehicle quotes.
  *
+ * <p><b>ATENÇÃO: Não migrar para
+ * {@link br.com.cernebr.gateway_nacional.config.HedgedExecutor} nem
+ * {@link br.com.cernebr.gateway_nacional.config.RefreshAheadCache}.</b>
+ * O provider primário é um scraper {@code FlareSolverr} + Chromium contra
+ * veiculos.fipe.org.br. A cascata sequencial atua como proteção de recursos:
+ * sob hedge, cada request dispararia uma sessão Chromium ainda que os
+ * fallbacks REST estivessem disponíveis. RAC dispararia o mesmo trabalho
+ * pesado em background. Mantenha {@code @Cacheable} puro com TTL longo.</p>
+ *
  * <p>Order: <b>FIPE-Oficial (FlareSolverr) → BrasilAPI → Parallelum</b>.
  * The official scraper became the primary on 2026-05-08 — at that date both
  * BrasilAPI's and Parallelum's FIPE proxies were broken upstream
