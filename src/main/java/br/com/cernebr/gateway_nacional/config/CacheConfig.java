@@ -15,6 +15,7 @@ import org.springframework.data.redis.serializer.RedisSerializationContext;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 
 /**
@@ -177,6 +178,48 @@ public class CacheConfig {
                 log.debug("Redis cache deserialize failed, treating as miss: {}", ex.getMessage());
                 return null;
             }
+        }
+    }
+
+    /**
+     * Envelope opt-in para o padrão soft-TTL / hard-TTL (refresh-ahead).
+     *
+     * <p>Quem grava no Redis usa o TTL configurado por cache nome ({@code hard TTL})
+     * — esse é o limite a partir do qual a key é descartada. O {@code soft TTL} vive
+     * fora do Redis: é uma duração arbitrária, definida no service, comparada contra
+     * {@link #cachedAt} para decidir se o valor ainda é "fresco" ou se vale acionar
+     * um refresh assíncrono enquanto serve o valor velho.</p>
+     *
+     * <p><b>Round-trip Jackson:</b> a {@link #redisValueSerializer() serialização}
+     * já configurada com default typing ativo materializa o wrapper como
+     * {@code ["...CachedEntry", {"value": ["...DtoConcreto", {…}], "cachedAt": "ISO-8601"}]}.
+     * O type-id no payload garante que o read-back reconstrua o {@code value}
+     * polimorficamente sem perda de tipo, e o {@link Instant} usa o formato ISO
+     * porque o {@code JavaTimeModule} desliga {@code WRITE_DATES_AS_TIMESTAMPS}.</p>
+     *
+     * <p><b>Quando é seguro embrulhar:</b> use para DTOs concretos
+     * (record/POJO). <b>Não</b> embrulhe coleções diretamente (ex.:
+     * {@code CachedEntry<List<X>>}) — o root array da lista cai na mesma
+     * lacuna de default typing tratada pelo {@link ResilientGenericJacksonSerializer},
+     * e o cache vai degradar para miss permanente. Se precisar cachear lista,
+     * embrulhe-a primeiro num DTO ({@code record Page<T>(List<T> items, …)}).</p>
+     *
+     * <p><b>Compatibilidade:</b> caches que continuam usando {@code @Cacheable}
+     * sem wrapper não são afetados — a presença do envelope é decidida pelo
+     * caller. Os dois formatos coexistem na mesma instância Redis.</p>
+     */
+    public record CachedEntry<T>(T value, Instant cachedAt) {
+
+        public static <T> CachedEntry<T> of(T value) {
+            return new CachedEntry<>(value, Instant.now());
+        }
+
+        /**
+         * {@code true} quando o valor passou do soft-TTL e está apto a refresh
+         * em background; ainda servível ao chamador atual.
+         */
+        public boolean isStale(Duration softTtl) {
+            return Duration.between(cachedAt, Instant.now()).compareTo(softTtl) > 0;
         }
     }
 }
