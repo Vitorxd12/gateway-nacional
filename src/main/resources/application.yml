@@ -93,12 +93,36 @@ gateway:
     open-library:
       base-url: https://openlibrary.org
   cambio:
-    # AwesomeAPI — endpoint público (sem chave) de cotações em tempo (quase)
-    # real. Aceita múltiplos pares por vírgula (USD-BRL,EUR-BRL,BTC-BRL).
-    # Cache curto de 3min protege a quota upstream contra burst de
-    # dashboards/ERPs.
+    # Tier 1 — PTAX oficial (Banco Central). Hedge entre proxy BrasilAPI e
+    # OLINDA direto: o primeiro a responder vence. Dados regulatórios usados
+    # em IR, balanço contábil, contratos públicos.
+    brasilapi:
+      base-url: https://brasilapi.com.br
+    bcb:
+      # Endpoint OLINDA do BCB. Date format do upstream é MM-DD-YYYY (US-style).
+      base-url: https://olinda.bcb.gov.br
+      # Quantos dias retroceder antes de desistir (cobre Carnaval + fim de
+      # semana adjacente). Cada moeda só faz UMA tentativa por data — a
+      # data resolvida pelo par-sonda é reusada pelos demais.
+      max-fallback-days: 7
+    # Tier 2 — AwesomeAPI (spot real-time comercial). Único provider que
+    # cobre cripto e cross-currency sem BRL. Cache 3min; só é invocado quando
+    # PTAX não pode atender (par não-elegível ou ambos PTAX providers down).
     awesomeapi:
       base-url: https://economia.awesomeapi.com.br
+  pix:
+    # Listagem de participantes do PIX. Cascata BrasilAPI (primário, RULE B —
+    # já consolida o CSV do BCB internamente) → BCB CSV oficial. Cache 24h
+    # com soft-TTL 6h via RAC alinha com a cadência de publicação do BCB
+    # (1 arquivo novo por dia útil bancário).
+    brasilapi:
+      base-url: https://brasilapi.com.br
+    bcb:
+      base-url: https://www.bcb.gov.br
+      # Quantos dias retroceder antes de desistir do CSV. 7 cobre o caso
+      # pior (Carnaval 5 dias úteis pulados + fim de semana adjacente).
+      # Tunning: na maioria das requests, a 1ª tentativa (hoje) já resolve.
+      max-fallback-days: 7
   juridico:
     sancoes:
       # CGU Portal da Transparência (CEIS) — exige header chave-api-dados
@@ -288,7 +312,13 @@ resilience4j:
       # Bancos providers
       brasilApiBancosCB:
         baseConfig: default
-      # Câmbio providers
+      # Câmbio providers — Tier 1 (PTAX oficial) + Tier 2 (AwesomeAPI fallback).
+      # CBs isolados para que falha do BCB OLINDA (gov.br pode picar) não
+      # contamine a percepção da BrasilAPI ou do AwesomeAPI.
+      cambioBrasilApiCB:
+        baseConfig: default
+      cambioBcbOlindaCB:
+        baseConfig: default
       awesomeApiCambioCB:
         baseConfig: default
       # Jurídico providers
@@ -351,6 +381,13 @@ resilience4j:
         baseConfig: default
       isbnOpenLibraryCB:
         baseConfig: default
+      # PIX participantes — BrasilAPI primário, BCB CSV fallback. CBs
+      # isolados para que falha do CSV (lento, ~MB de download + parse) não
+      # contamine a percepção da BrasilAPI (REST simples).
+      pixBrasilApiCB:
+        baseConfig: default
+      pixBcbCsvCB:
+        baseConfig: default
 
   timelimiter:
     configs:
@@ -396,7 +433,15 @@ resilience4j:
       # Bancos providers
       brasilApiBancosCB:
         baseConfig: default
-      # Câmbio providers
+      # Câmbio providers — PTAX faz N chamadas internas (uma por moeda) +
+      # retry retroativo no BCB; teto 15s cobre o caso pior (~7 retries para
+      # encontrar a data + N moedas em paralelo).
+      cambioBrasilApiCB:
+        baseConfig: default
+        timeoutDuration: 15s
+      cambioBcbOlindaCB:
+        baseConfig: default
+        timeoutDuration: 15s
       awesomeApiCambioCB:
         baseConfig: default
       # Jurídico providers — DataJud e CGU CEIS rodam queries pesadas em
@@ -479,6 +524,14 @@ resilience4j:
         baseConfig: default
       isbnOpenLibraryCB:
         baseConfig: default
+      # PIX providers
+      pixBrasilApiCB:
+        baseConfig: default
+      # BCB CSV pode encadear até 7 tentativas de data + parsing — teto 30s
+      # para cobrir o caso pior (Carnaval) sem pendurar a request.
+      pixBcbCsvCB:
+        baseConfig: default
+        timeoutDuration: 30s
 
 logging:
   level:

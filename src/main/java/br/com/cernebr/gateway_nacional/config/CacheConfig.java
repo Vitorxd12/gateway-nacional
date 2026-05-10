@@ -70,6 +70,11 @@ public class CacheConfig {
     // sem degradar a percepção de frescor; o RAC com soft-TTL de 90d garante
     // refresh oportunista para títulos quentes.
     private static final Duration ISBNS_TTL = Duration.ofDays(365);
+    // PIX participantes — o BCB regenera o CSV em todo dia útil bancário; 24h
+    // de hard-TTL casa com a cadência de publicação. Soft-TTL de 6h via RAC
+    // dispara refresh oportunista (cobre o cenário "li às 8h, BCB publicou
+    // novo às 14h, próximo cliente após 14h pega versão fresca em background").
+    private static final Duration PIX_PARTICIPANTES_TTL = Duration.ofHours(24);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
@@ -86,6 +91,7 @@ public class CacheConfig {
     private static final String PROCESSOS_CACHE = "processos";
     private static final String INDICADORES_APS_CACHE = "indicadoresAps";
     private static final String ISBNS_CACHE = "isbns";
+    private static final String PIX_PARTICIPANTES_CACHE = "pixParticipantes";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -106,7 +112,8 @@ public class CacheConfig {
                 Map.entry(SANCOES_CACHE, baseConfig().entryTtl(SANCOES_TTL)),
                 Map.entry(PROCESSOS_CACHE, baseConfig().entryTtl(PROCESSOS_TTL)),
                 Map.entry(INDICADORES_APS_CACHE, baseConfig().entryTtl(INDICADORES_APS_TTL)),
-                Map.entry(ISBNS_CACHE, baseConfig().entryTtl(ISBNS_TTL))
+                Map.entry(ISBNS_CACHE, baseConfig().entryTtl(ISBNS_TTL)),
+                Map.entry(PIX_PARTICIPANTES_CACHE, baseConfig().entryTtl(PIX_PARTICIPANTES_TTL))
         );
 
         return RedisCacheManager.builder(connectionFactory)
