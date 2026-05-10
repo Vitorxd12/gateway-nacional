@@ -90,6 +90,14 @@ public class CacheConfig {
     // baixados do dados.cvm.gov.br. Publicação mensal. 30d hard absorve o
     // ciclo; 7d soft via RAC dispara refresh entre janelas.
     private static final Duration CVM_TTL = Duration.ofDays(30);
+    // B3 — listagens de tickers (ações + fundos). A B3 atualiza a base de
+    // listadas semanalmente (admissões/exclusões); 30d hard absorve o ciclo,
+    // 7d soft via RAC dispara refresh oportunista entre janelas.
+    private static final Duration B3_TTL = Duration.ofDays(30);
+    // DDD — quadro nacional ANATEL muda raras vezes por década. 365d hard
+    // elimina round-trip à ANATEL no hot path; 90d soft via RAC permite
+    // refresh oportunista para chaves quentes (DDDs metropolitanos).
+    private static final Duration DDD_TTL = Duration.ofDays(365);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
@@ -112,6 +120,9 @@ public class CacheConfig {
     private static final String IBGE_MUNICIPIOS_CACHE = "ibgeMunicipios";
     private static final String CVM_CORRETORAS_CACHE = "cvmCorretoras";
     private static final String CVM_FUNDOS_CACHE = "cvmFundos";
+    private static final String B3_ACOES_CACHE = "b3Acoes";
+    private static final String B3_FUNDOS_CACHE = "b3Fundos";
+    private static final String DDD_CACHE = "ddd";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -138,7 +149,10 @@ public class CacheConfig {
                 Map.entry(IBGE_UF_CACHE, baseConfig().entryTtl(IBGE_TTL)),
                 Map.entry(IBGE_MUNICIPIOS_CACHE, baseConfig().entryTtl(IBGE_TTL)),
                 Map.entry(CVM_CORRETORAS_CACHE, baseConfig().entryTtl(CVM_TTL)),
-                Map.entry(CVM_FUNDOS_CACHE, baseConfig().entryTtl(CVM_TTL))
+                Map.entry(CVM_FUNDOS_CACHE, baseConfig().entryTtl(CVM_TTL)),
+                Map.entry(B3_ACOES_CACHE, baseConfig().entryTtl(B3_TTL)),
+                Map.entry(B3_FUNDOS_CACHE, baseConfig().entryTtl(B3_TTL)),
+                Map.entry(DDD_CACHE, baseConfig().entryTtl(DDD_TTL))
         );
 
         return RedisCacheManager.builder(connectionFactory)

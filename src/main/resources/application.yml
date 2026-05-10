@@ -166,6 +166,16 @@ gateway:
       url: https://dados.cvm.gov.br/dados/INTERMED/CAD/DADOS/cad_intermed.zip
     fundos:
       url: https://dados.cvm.gov.br/dados/FI/CAD/DADOS/cad_fi.csv
+  b3:
+    # Listagens de tickers da B3. Endpoint público que aceita parâmetros
+    # como JSON-base64 no PATH (peculiaridade do upstream). Single provider —
+    # B3 é fonte canônica das listagens.
+    base-url: https://sistemaswebb3-listados.b3.com.br
+  ddd:
+    # Quadro nacional de DDDs publicado pela ANATEL em CSV (latin-1).
+    # Single provider; cache 365d cobre downtimes longos.
+    anatel:
+      url: https://www.anatel.gov.br/dadosabertos/PDA/Codigo_Nacional/PGCN.csv
   ncm:
     # Nomenclatura Comum do Mercosul (NCM) — fundamental para emissão de
     # NF-e. Cascata BrasilAPI → Siscomex; cache de 30 dias.
@@ -429,6 +439,13 @@ resilience4j:
         baseConfig: default
       cvmFundosCB:
         baseConfig: default
+      # B3 tickers — paginação paralela interna; CB único cobre os dois
+      # endpoints (ações + fundos) porque vêm do mesmo upstream.
+      b3TickersCB:
+        baseConfig: default
+      # ANATEL DDD — download CSV simples; CB único.
+      anatelDddCB:
+        baseConfig: default
 
   timelimiter:
     configs:
@@ -594,6 +611,15 @@ resilience4j:
       cvmFundosCB:
         baseConfig: default
         timeoutDuration: 60s
+      # B3 — 1ª chamada dispara N páginas em paralelo (sonda + N-1 paralelas
+      # via virtual threads). Cada página típica responde em <1s; teto 30s
+      # cobre worst case de ~600 ações = 5 páginas com upstream lento.
+      b3TickersCB:
+        baseConfig: default
+        timeoutDuration: 30s
+      # ANATEL DDD — download CSV pequeno (~few KB); default 3s sobra.
+      anatelDddCB:
+        baseConfig: default
 
 logging:
   level:
