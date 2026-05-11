@@ -2,6 +2,8 @@ package br.com.cernebr.gateway_nacional.financeiro.cvm.service;
 
 import br.com.cernebr.gateway_nacional.config.RefreshAheadCache;
 import br.com.cernebr.gateway_nacional.exception.ResourceNotFoundException;
+import br.com.cernebr.gateway_nacional.exception.ResourceUnavailableException;
+import br.com.cernebr.gateway_nacional.financeiro.cvm.client.BrasilApiCvmFundosClient;
 import br.com.cernebr.gateway_nacional.financeiro.cvm.client.CvmFundosClient;
 import br.com.cernebr.gateway_nacional.financeiro.cvm.dto.CvmFundosSnapshot;
 import br.com.cernebr.gateway_nacional.financeiro.cvm.dto.FundoDetailResponse;
@@ -14,16 +16,29 @@ import java.time.Duration;
 import java.util.List;
 
 /**
- * Resolve consultas de fundos CVM sobre snapshot cacheado. Mesma estratégia
- * do {@link CvmCorretorasService}: snapshot único baixado e mantido em cache;
- * paginação e lookup por CNPJ operam em memória.
+ * Resolve consultas de fundos CVM priorizando o download direto do
+ * {@code cad_fi.csv}; BrasilAPI entra como fallback granular (por operação,
+ * não snapshot completo).
  *
- * <p>{@link #listPaginated(int, int)} aplica os mesmos limites da BrasilAPI:
- * tamanho máximo 200 por página (proteção contra request abusiva — listar 30k
- * fundos em uma única response seria ~30MB de JSON).</p>
+ * <h2>Cascata (ordem mandatória)</h2>
+ * <ol>
+ *   <li><b>Tier 1 — CVM direto:</b> {@link CvmFundosClient} baixa o CSV de
+ *       ~10MB com 30k fundos e o mantém em snapshot cacheado via RAC.
+ *       Paginação e lookup por CNPJ operam em memória — O(N) sobre lista
+ *       cacheada. Caminho normal.</li>
+ *   <li><b>Tier 2 — BrasilAPI granular:</b> {@link BrasilApiCvmFundosClient}
+ *       acionado por operação quando o snapshot interno não consegue
+ *       carregar (CVM fora + cache expirado). Não replica o snapshot
+ *       inteiro — usa os endpoints paginado/por-CNPJ da BrasilAPI direto.
+ *       Modo degradado: cada request vira round-trip, mas o serviço
+ *       continua respondendo.</li>
+ * </ol>
  *
- * <p>RAC: hard-TTL 30d / soft 7d, alinhado com a cadência de publicação
- * mensal do {@code cad_fi.csv}.</p>
+ * <p><b>Diretriz mandatória:</b> a consulta direta à CVM nunca é pulada
+ * em favor da BrasilAPI. Fallback existe pra indisponibilidade real.</p>
+ *
+ * <p>{@link #listPaginated} aplica limite 200 por página — proteção contra
+ * response gigante quando vier do snapshot interno (30MB se listássemos tudo).</p>
  */
 @Slf4j
 @Service
@@ -36,12 +51,15 @@ public class CvmFundosService {
     /** Limite herdado da BrasilAPI — proteção contra response gigante. */
     public static final int MAX_PAGE_SIZE = 200;
 
-    private final CvmFundosClient client;
+    private final CvmFundosClient cvmDirectClient;
+    private final BrasilApiCvmFundosClient brasilApiFallbackClient;
     private final RefreshAheadCache refreshAheadCache;
 
-    public CvmFundosService(CvmFundosClient client,
+    public CvmFundosService(CvmFundosClient cvmDirectClient,
+                            BrasilApiCvmFundosClient brasilApiFallbackClient,
                             RefreshAheadCache refreshAheadCache) {
-        this.client = client;
+        this.cvmDirectClient = cvmDirectClient;
+        this.brasilApiFallbackClient = brasilApiFallbackClient;
         this.refreshAheadCache = refreshAheadCache;
     }
 
@@ -54,7 +72,20 @@ public class CvmFundosService {
                     "size deve estar entre 1 e " + MAX_PAGE_SIZE + ", recebido: " + size);
         }
 
-        List<FundoDetailResponse> all = loadSnapshot().fundos();
+        List<FundoDetailResponse> all;
+        try {
+            all = loadSnapshot().fundos();
+        } catch (ResourceUnavailableException tier1Failure) {
+            log.info("CVM fundos snapshot interno indisponível ({}). Cascateando pra BrasilAPI fallback (page={} size={}).",
+                    tier1Failure.getMessage(), page, size);
+            try {
+                return brasilApiFallbackClient.fetchPage(size, page);
+            } catch (RuntimeException brasilApiFailure) {
+                throw unify(tier1Failure, brasilApiFailure, "listPaginated page=" + page + " size=" + size);
+            }
+        }
+
+        // Tier 1 OK — pagina em memória sobre o snapshot.
         int total = all.size();
         int from = Math.min((page - 1) * size, total);
         int to = Math.min(from + size, total);
@@ -73,7 +104,22 @@ public class CvmFundosService {
 
     public FundoDetailResponse findByCnpj(String cnpj) {
         String normalized = cnpj.replaceAll("\\D", "");
-        return loadSnapshot().fundos().stream()
+        CvmFundosSnapshot snapshot;
+        try {
+            snapshot = loadSnapshot();
+        } catch (ResourceUnavailableException tier1Failure) {
+            log.info("CVM fundos snapshot interno indisponível ({}). Cascateando pra BrasilAPI fallback (cnpj={}).",
+                    tier1Failure.getMessage(), normalized);
+            try {
+                return brasilApiFallbackClient.findByCnpj(normalized);
+            } catch (ResourceNotFoundException notFound) {
+                throw notFound;
+            } catch (RuntimeException brasilApiFailure) {
+                throw unify(tier1Failure, brasilApiFailure, "findByCnpj=" + normalized);
+            }
+        }
+
+        return snapshot.fundos().stream()
                 .filter(f -> normalized.equals(f.cnpj()))
                 .findFirst()
                 .orElseThrow(() -> new ResourceNotFoundException("Fundo",
@@ -82,6 +128,13 @@ public class CvmFundosService {
 
     private CvmFundosSnapshot loadSnapshot() {
         return refreshAheadCache.get(CACHE_NAME, CACHE_KEY, SOFT_TTL,
-                client::fetchSnapshot);
+                cvmDirectClient::fetchSnapshot);
+    }
+
+    private static ResourceUnavailableException unify(Throwable tier1, Throwable tier2, String context) {
+        ResourceUnavailableException unified = new ResourceUnavailableException("cvm-fundos",
+                "CVM direto e BrasilAPI (fallback) falharam para " + context, tier2);
+        unified.addSuppressed(tier1);
+        return unified;
     }
 }

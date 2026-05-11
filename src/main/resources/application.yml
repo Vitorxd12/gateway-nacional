@@ -158,24 +158,33 @@ gateway:
     dados-abertos-br:
       # API legada em HTTP (não HTTPS). Sobrescrever caso uma versão segura apareça.
       base-url: http://educacao.dadosabertosbr.com
+    # Tier 2 — BrasilAPI fallback (só acionado quando gov + dados-abertos-br
+    # estão indisponíveis simultaneamente).
+    brasilapi:
+      base-url: https://brasilapi.com.br
   cvm:
-    # Cadastro CVM — corretoras (ZIP→CSV) e fundos (CSV direto). Single
-    # provider (a CVM é fonte canônica). URLs absolutas porque os arquivos
-    # vivem em paths fixos do dados.cvm.gov.br.
+    # Cadastro CVM — corretoras (ZIP→CSV) e fundos (CSV direto). Tier 1:
+    # download direto do dados.cvm.gov.br. Tier 2: BrasilAPI fallback (só
+    # acionado quando o portal CVM está fora durante o refresh do snapshot).
     corretoras:
       url: https://dados.cvm.gov.br/dados/INTERMED/CAD/DADOS/cad_intermed.zip
     fundos:
       url: https://dados.cvm.gov.br/dados/FI/CAD/DADOS/cad_fi.csv
+    brasilapi:
+      base-url: https://brasilapi.com.br
   b3:
-    # Listagens de tickers da B3. Endpoint público que aceita parâmetros
-    # como JSON-base64 no PATH (peculiaridade do upstream). Single provider —
-    # B3 é fonte canônica das listagens.
+    # Tier 1: B3 oficial (base64-params no PATH, paginação paralela). Tier 2:
+    # BrasilAPI fallback (já agrega todas as páginas internamente — devolve
+    # lista completa numa chamada).
     base-url: https://sistemaswebb3-listados.b3.com.br
+    brasilapi:
+      base-url: https://brasilapi.com.br
   ddd:
-    # Quadro nacional de DDDs publicado pela ANATEL em CSV (latin-1).
-    # Single provider; cache 365d cobre downtimes longos.
+    # Tier 1: ANATEL CSV oficial (latin-1). Tier 2: BrasilAPI per-DDD fallback.
     anatel:
       url: https://www.anatel.gov.br/dadosabertos/PDA/Codigo_Nacional/PGCN.csv
+    brasilapi:
+      base-url: https://brasilapi.com.br
   ncm:
     # Nomenclatura Comum do Mercosul (NCM) — fundamental para emissão de
     # NF-e. Cascata BrasilAPI → Siscomex; cache de 30 dias.
@@ -446,6 +455,21 @@ resilience4j:
       # ANATEL DDD — download CSV simples; CB único.
       anatelDddCB:
         baseConfig: default
+      # ────────────────────────────────────────────────────────────────────
+      # BrasilAPI fallbacks — só acionados quando o tier 1 (consulta direta
+      # à fonte oficial) falha. CBs próprios pra que falha do fallback não
+      # contamine a percepção dos providers diretos.
+      # ────────────────────────────────────────────────────────────────────
+      brasilApiDddCB:
+        baseConfig: default
+      brasilApiCvmCorretorasCB:
+        baseConfig: default
+      brasilApiCvmFundosCB:
+        baseConfig: default
+      brasilApiB3CB:
+        baseConfig: default
+      brasilApiIbgeCB:
+        baseConfig: default
 
   timelimiter:
     configs:
@@ -619,6 +643,21 @@ resilience4j:
         timeoutDuration: 30s
       # ANATEL DDD — download CSV pequeno (~few KB); default 3s sobra.
       anatelDddCB:
+        baseConfig: default
+      # BrasilAPI fallbacks — JSON pré-agregado, single round-trip. Default
+      # 3s cobre quase tudo. CVM Fundos paginado pode ser ligeiramente mais
+      # lento sob carga, mas ainda dentro do default.
+      brasilApiDddCB:
+        baseConfig: default
+      brasilApiCvmCorretorasCB:
+        baseConfig: default
+      brasilApiCvmFundosCB:
+        baseConfig: default
+        timeoutDuration: 10s
+      brasilApiB3CB:
+        baseConfig: default
+        timeoutDuration: 10s
+      brasilApiIbgeCB:
         baseConfig: default
 
 logging:
