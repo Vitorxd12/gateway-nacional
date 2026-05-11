@@ -1,6 +1,7 @@
 package br.com.cernebr.gateway_nacional.cadastral.cep.client;
 
 import br.com.cernebr.gateway_nacional.cadastral.cep.dto.CepResponse;
+import br.com.cernebr.gateway_nacional.cadastral.cep.dto.CepResponse.Localizacao;
 import br.com.cernebr.gateway_nacional.exception.ResourceUnavailableException;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -9,6 +10,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+
+import java.math.BigDecimal;
 
 /**
  * Tertiary CEP provider — AwesomeAPI (https://cep.awesomeapi.com.br).
@@ -61,14 +64,39 @@ public class AwesomeApiClient implements CepClientProvider {
             String city,
             String district,
             String address,
-            @JsonProperty("city_ibge") String cityIbge
+            @JsonProperty("city_ibge") String cityIbge,
+            // AwesomeAPI já devolve coordenadas em strings para a maioria dos
+            // CEPs urbanos. Aproveitamos no caminho rápido — economiza um
+            // round-trip ao Nominatim quando o AwesomeAPI vence o hedge.
+            String lat,
+            String lng
     ) {
         boolean isInvalid() {
             return code == null || code.isBlank();
         }
 
         CepResponse toCepResponse() {
-            return new CepResponse(code, address, null, district, city, state, cityIbge);
+            Localizacao loc = parseLocalizacao();
+            return new CepResponse(code, address, null, district, city, state, cityIbge, loc);
+        }
+
+        private Localizacao parseLocalizacao() {
+            if (lat == null || lat.isBlank() || lng == null || lng.isBlank()) {
+                return null;
+            }
+            try {
+                return new Localizacao(
+                        new BigDecimal(lat.trim()),
+                        new BigDecimal(lng.trim()),
+                        // AwesomeAPI não publica precisão; assumimos APROXIMADA por
+                        // segurança — geocodificação por CEP costuma cair no centroide
+                        // do segmento de logradouro, não na numeração específica.
+                        "APROXIMADA",
+                        PROVIDER_NAME
+                );
+            } catch (NumberFormatException ex) {
+                return null;
+            }
         }
     }
 }

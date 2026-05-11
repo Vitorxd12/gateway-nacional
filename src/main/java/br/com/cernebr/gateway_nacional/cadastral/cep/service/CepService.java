@@ -50,6 +50,7 @@ public class CepService {
     private final BrasilApiClient brasilApi;
     private final AwesomeApiClient awesomeApi;
     private final IbgeEnrichmentService ibgeEnrichmentService;
+    private final GeoEnrichmentService geoEnrichmentService;
     private final HedgedExecutor hedgedExecutor;
     private final RefreshAheadCache refreshAheadCache;
 
@@ -57,12 +58,14 @@ public class CepService {
                       BrasilApiClient brasilApi,
                       AwesomeApiClient awesomeApi,
                       IbgeEnrichmentService ibgeEnrichmentService,
+                      GeoEnrichmentService geoEnrichmentService,
                       HedgedExecutor hedgedExecutor,
                       RefreshAheadCache refreshAheadCache) {
         this.viaCep = viaCep;
         this.brasilApi = brasilApi;
         this.awesomeApi = awesomeApi;
         this.ibgeEnrichmentService = ibgeEnrichmentService;
+        this.geoEnrichmentService = geoEnrichmentService;
         this.hedgedExecutor = hedgedExecutor;
         this.refreshAheadCache = refreshAheadCache;
     }
@@ -71,12 +74,31 @@ public class CepService {
         return refreshAheadCache.get(CACHE_NAME, cep, SOFT_TTL, () -> loadFromProviders(cep));
     }
 
+    /**
+     * Pipeline do loader (executado uma vez por miss + uma vez por background
+     * refresh do soft-TTL):
+     * <ol>
+     *   <li><b>Tier 1 — endereço base:</b> hedge entre ViaCEP, BrasilAPI v1 e
+     *       AwesomeAPI. Vence o primeiro com sucesso.</li>
+     *   <li><b>IBGE backfill:</b> preenche o código IBGE quando o provider
+     *       vencedor não trouxe (ViaCEP/BrasilAPI v1 não têm).</li>
+     *   <li><b>Geo backfill:</b> se o vencedor não trouxe lat/long
+     *       (ViaCEP, BrasilAPI v1), cascata BrasilAPI v2 → Nominatim OSM até
+     *       resolver. Falha total é silenciosa — devolve a resposta sem
+     *       localização para preservar o contrato CEP base.</li>
+     * </ol>
+     *
+     * <p>O resultado completo (endereço + IBGE + geo) entra no cache, então
+     * hits subsequentes não pagam Nominatim — é o mesmo TTL de 30d hard /
+     * 7d soft do cache {@code ceps}.</p>
+     */
     private CepResponse loadFromProviders(String cep) {
         CepResponse raw = hedgedExecutor.anyOf(DOMAIN, List.of(
                 new NamedSupplier<>(viaCep.providerName(),     () -> viaCep.fetch(cep)),
                 new NamedSupplier<>(brasilApi.providerName(),  () -> brasilApi.fetch(cep)),
                 new NamedSupplier<>(awesomeApi.providerName(), () -> awesomeApi.fetch(cep))
         ));
-        return ibgeEnrichmentService.enrich(raw);
+        CepResponse comIbge = ibgeEnrichmentService.enrich(raw);
+        return geoEnrichmentService.enrich(comIbge);
     }
 }

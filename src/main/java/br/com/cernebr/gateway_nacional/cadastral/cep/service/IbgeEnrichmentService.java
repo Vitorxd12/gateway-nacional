@@ -95,15 +95,10 @@ public class IbgeEnrichmentService {
         log.debug("IBGE in-memory enrichment hit for uf={} localidade={} -> {}",
                 response.uf(), response.localidade(), ibge);
 
-        return new CepResponse(
-                response.cep(),
-                response.logradouro(),
-                response.complemento(),
-                response.bairro(),
-                response.localidade(),
-                response.uf(),
-                ibge
-        );
+        // withIbge preserva a localização eventualmente já preenchida por um
+        // provider tier-1 (AwesomeAPI traz lat/lng grátis) — não a sobrescreve
+        // com null como o construtor de 7 args faria.
+        return response.withIbge(ibge);
     }
 
     private static String buildKey(String uf, String localidade) {
