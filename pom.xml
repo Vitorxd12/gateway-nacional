@@ -89,6 +89,13 @@
 			<artifactId>jsoup</artifactId>
 			<version>1.18.1</version>
 		</dependency>
+		<!-- Jackson XML data format — consome o XML legado do CPTEC/INPE
+		     (servicos.cptec.inpe.br) com o mesmo ObjectMapper já usado para
+		     JSON. Versão herdada do spring-boot-starter-json BOM. -->
+		<dependency>
+			<groupId>com.fasterxml.jackson.dataformat</groupId>
+			<artifactId>jackson-dataformat-xml</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.projectlombok</groupId>
 			<artifactId>lombok</artifactId>

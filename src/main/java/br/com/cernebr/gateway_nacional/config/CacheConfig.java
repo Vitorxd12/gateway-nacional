@@ -51,6 +51,11 @@ public class CacheConfig {
     // suficiente para colapsar bursts de dashboards/ERPs em uma única
     // requisição upstream, curto o bastante para não estagnar a cotação.
     private static final Duration CAMBIO_TTL = Duration.ofMinutes(3);
+    // PTAX histórico — fixings de datas passadas são, por definição, imutáveis.
+    // Uma vez publicado, o BCB não revisa o boletim "Fechamento PTAX" daquela
+    // data. TTL longo (365d) elimina ~100% do tráfego upstream para relatórios
+    // recorrentes (IR mensal, balanço trimestral, retroativos de NF-e).
+    private static final Duration CAMBIO_HISTORICO_TTL = Duration.ofDays(365);
     // Sanções (CGU/CEIS) — publicações no portal entram com semanas de
     // delay frente ao DOU; 7 dias absorve a janela típica sem servir
     // dados antigos demais para devida diligência de compras.
@@ -98,6 +103,28 @@ public class CacheConfig {
     // elimina round-trip à ANATEL no hot path; 90d soft via RAC permite
     // refresh oportunista para chaves quentes (DDDs metropolitanos).
     private static final Duration DDD_TTL = Duration.ofDays(365);
+    // CPTEC — meteorologia. Previsão de até 6 dias muda lentamente; 1h
+    // hard absorve bursts de dashboards agro/logístico sem servir nada
+    // estranho ao usuário final.
+    private static final Duration CPTEC_TTL = Duration.ofHours(1);
+    // Registro.br — disponibilidade de domínio. Resultado é "snapshot": um
+    // domínio liberado pode ser registrado em segundos por terceiros, então
+    // 10min absorve consultas repetidas do mesmo dashboard sem mascarar
+    // movimentações reais de registro.
+    private static final Duration REGISTRO_BR_TTL = Duration.ofMinutes(10);
+    // TUSS — terminologia ANS. A ANS publica revisões com cadência mensal
+    // a trimestral; 7d hard cobre o ciclo médio sem desperdiçar Redis em
+    // consultas a códigos individuais.
+    private static final Duration TUSS_TTL = Duration.ofDays(7);
+    // Licitações — listagem agregada (PNCP/ComprasNet, BLL, BNC, Licitanet).
+    // 12h hard cobre o ciclo de publicação típico do PNCP (refreshes em
+    // janelas de 6-12h); soft-TTL 30m via RAC dispara refresh oportunista
+    // entre ondas matinais e vespertinas sem martelar os portais frágeis.
+    private static final Duration LICITACOES_ATIVAS_TTL = Duration.ofHours(12);
+    // Licitações — detalhe de um edital. Anexos e itens são estáveis após
+    // publicação; 12h hard sobra. Soft-TTL 2h via RAC absorve correções
+    // pontuais (republicação de edital com errata).
+    private static final Duration LICITACOES_DETALHE_TTL = Duration.ofHours(12);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
@@ -110,6 +137,7 @@ public class CacheConfig {
     private static final String NCM_CACHE = "ncm";
     private static final String CNAE_CACHE = "cnae";
     private static final String CAMBIO_CACHE = "cambio";
+    private static final String CAMBIO_HISTORICO_CACHE = "cambioHistorico";
     private static final String SANCOES_CACHE = "sancoes";
     private static final String PROCESSOS_CACHE = "processos";
     private static final String INDICADORES_APS_CACHE = "indicadoresAps";
@@ -123,6 +151,11 @@ public class CacheConfig {
     private static final String B3_ACOES_CACHE = "b3Acoes";
     private static final String B3_FUNDOS_CACHE = "b3Fundos";
     private static final String DDD_CACHE = "ddd";
+    private static final String CPTEC_CACHE = "cptec";
+    private static final String REGISTRO_BR_CACHE = "registroBr";
+    private static final String TUSS_CACHE = "tuss";
+    private static final String LICITACOES_ATIVAS_CACHE = "licitacoesAtivas";
+    private static final String LICITACOES_DETALHE_CACHE = "licitacoesDetalhe";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -140,6 +173,7 @@ public class CacheConfig {
                 Map.entry(NCM_CACHE, baseConfig().entryTtl(NCM_TTL)),
                 Map.entry(CNAE_CACHE, baseConfig().entryTtl(CNAE_TTL)),
                 Map.entry(CAMBIO_CACHE, baseConfig().entryTtl(CAMBIO_TTL)),
+                Map.entry(CAMBIO_HISTORICO_CACHE, baseConfig().entryTtl(CAMBIO_HISTORICO_TTL)),
                 Map.entry(SANCOES_CACHE, baseConfig().entryTtl(SANCOES_TTL)),
                 Map.entry(PROCESSOS_CACHE, baseConfig().entryTtl(PROCESSOS_TTL)),
                 Map.entry(INDICADORES_APS_CACHE, baseConfig().entryTtl(INDICADORES_APS_TTL)),
@@ -152,7 +186,12 @@ public class CacheConfig {
                 Map.entry(CVM_FUNDOS_CACHE, baseConfig().entryTtl(CVM_TTL)),
                 Map.entry(B3_ACOES_CACHE, baseConfig().entryTtl(B3_TTL)),
                 Map.entry(B3_FUNDOS_CACHE, baseConfig().entryTtl(B3_TTL)),
-                Map.entry(DDD_CACHE, baseConfig().entryTtl(DDD_TTL))
+                Map.entry(DDD_CACHE, baseConfig().entryTtl(DDD_TTL)),
+                Map.entry(CPTEC_CACHE, baseConfig().entryTtl(CPTEC_TTL)),
+                Map.entry(REGISTRO_BR_CACHE, baseConfig().entryTtl(REGISTRO_BR_TTL)),
+                Map.entry(TUSS_CACHE, baseConfig().entryTtl(TUSS_TTL)),
+                Map.entry(LICITACOES_ATIVAS_CACHE, baseConfig().entryTtl(LICITACOES_ATIVAS_TTL)),
+                Map.entry(LICITACOES_DETALHE_CACHE, baseConfig().entryTtl(LICITACOES_DETALHE_TTL))
         );
 
         return RedisCacheManager.builder(connectionFactory)

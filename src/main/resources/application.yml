@@ -49,6 +49,27 @@ gateway:
     url: ${GATEWAY_SISAB_SIDECAR_URL:}
   # Base URLs por provedor — sobrescritas em test profile (WireMock) e
   # eventualmente em deploys que precisem apontar para mirrors internos.
+  cep:
+    # Tier 1 — endereço base (hedge entre 3 providers). Sem geo.
+    viacep:
+      base-url: https://viacep.com.br
+    brasilapi:
+      base-url: https://brasilapi.com.br
+    awesomeapi:
+      base-url: https://cep.awesomeapi.com.br
+    # Tier 2 — backfill de geocodificação. Acionado apenas quando o tier 1
+    # não trouxe lat/long (AwesomeAPI o faz no caminho rápido; ViaCEP e
+    # BrasilAPI v1 não). Cascata oportunista: BrasilAPI v2 → Nominatim direto.
+    nominatim:
+      # Para deploys self-host de alto volume, apontar para uma instância
+      # privada Docker (mediagis/nominatim) — o servidor público do OSM
+      # rate-limita 1 req/s por IP. O cache de 30d sobre o resultado já
+      # absorve quase todo o tráfego, mas em pico de cold-start vale a pena.
+      base-url: https://nominatim.openstreetmap.org
+      # Política do Nominatim: User-Agent identificável é obrigatório. Caso
+      # contrário o servidor recusa a request. Personalizar via env para
+      # deploys que querem rastreabilidade própria.
+      user-agent: ${GATEWAY_CEP_NOMINATIM_USER_AGENT:GatewayNacional/1.0 (+https://github.com/cernebr/gateway-nacional)}
   taxas:
     brasilapi:
       base-url: https://brasilapi.com.br
@@ -179,6 +200,30 @@ gateway:
     base-url: https://sistemaswebb3-listados.b3.com.br
     brasilapi:
       base-url: https://brasilapi.com.br
+  cptec:
+    # Meteorologia (operacional/agro/logística). Hedge entre CPTEC/INPE
+    # direto (XML legado, HTTP, sem TLS no subdomínio) e BrasilAPI (proxy
+    # do mesmo XML com cobertura Cloudflare). O upstream pública cinco
+    # rotas: cidade, capital, aeroporto/{icao}, previsão e ondas.
+    inpe:
+      base-url: http://servicos.cptec.inpe.br/XML
+    brasilapi:
+      base-url: https://brasilapi.com.br
+  registrobr:
+    # Disponibilidade de domínios .br. Hedge entre Registro.br direto
+    # (JSON ajax/avail) e BrasilAPI (proxy). Cobre TODOS os TLDs .br
+    # publicados pelo NIC.br (.com.br, .net.br, .gov.br, etc.).
+    oficial:
+      base-url: https://registro.br
+    brasilapi:
+      base-url: https://brasilapi.com.br
+  tuss:
+    # Terminologia Unificada da Saúde Suplementar — códigos publicados
+    # pela ANS. Cascata BrasilAPI (proxy oficial — RULE B) → snapshot
+    # local empacotado em data/tuss_terms.json. O snapshot garante que
+    # o gateway responde mesmo se a BrasilAPI estiver fora.
+    brasilapi:
+      base-url: https://brasilapi.com.br
   ddd:
     # Tier 1: ANATEL CSV oficial (latin-1). Tier 2: BrasilAPI per-DDD fallback.
     anatel:
@@ -248,6 +293,35 @@ gateway:
       # como ponto de extensão futura.
       base-url: https://sisab.saude.gov.br
       report-path: /paginas/acessoRestrito/relatorio/federal/envio/RelValidacao.xhtml
+  licitacoes:
+    # Módulo GovTech — integração unificada dos 4 portais cobertos pelo
+    # gateway. Cascata sequencial (não hedge) para proteger a quota dos
+    # portais frágeis (BLL/BNC bloqueiam IPs sob martelagem). RAC com
+    # soft-TTL 30m / hard-TTL 12h absorve picos sem expor o ComprasNet à
+    # carga repetida — chaves quentes refrescam em background.
+    comprasnet:
+      # PNCP — Portal Nacional de Compras Públicas. Sucessor oficial do
+      # ComprasNet federal (Lei 14.133/2021 obriga publicação aqui). API
+      # REST pública, sem credencial. Endpoint canônico:
+      # /api/consulta/v1/contratacoes/proposta.
+      base-url: https://pncp.gov.br
+    bll:
+      # Bolsa de Licitações e Leilões — concentra prefeituras e estatais.
+      # Sem API pública: scraping HTML via Jsoup sobre /processos.
+      base-url: https://bll.org.br
+      user-agent: Mozilla/5.0 (compatible; GatewayNacional/1.0)
+      timeout-millis: 8000
+    bnc:
+      # Bolsa Nacional de Compras — privada, forte presença Sul/Sudeste.
+      # A SPA pública consome /api/painel/processos (JSON ajax interno).
+      # Interceptamos esse endpoint para extração estável.
+      base-url: https://www.bnc.org.br
+    licitanet:
+      # Licitanet — marketplace privado focado em pregão eletrônico.
+      # API REST interna acessível sem credencial para consulta de
+      # processos publicados (status=PUBLICADO).
+      api-base-url: https://api.licitanet.com.br
+      public-base-url: https://app.licitanet.com.br
   avaliacao:
     # Marketplaces consultados via Web Scraping. URLs e templates são
     # configuráveis porque a estrutura dos sites muda — basta sobrescrever
@@ -313,12 +387,19 @@ resilience4j:
     instances:
       # Uma instância por provedor — isola estado (open/closed/half-open) por upstream,
       # evitando que falha do ViaCEP "contamine" a saúde percebida do BrasilAPI.
-      # CEP providers
+      # CEP providers — tier 1 (endereço base, hedge paralelo)
       viaCepCB:
         baseConfig: default
       brasilApiCB:
         baseConfig: default
       awesomeApiCB:
+        baseConfig: default
+      # CEP providers — tier 2 (geocodificação opcional). CBs isolados do
+      # tier 1 porque a falha do Nominatim sob rate-limit não pode poluir
+      # a percepção dos providers de endereço.
+      brasilApiV2GeoCB:
+        baseConfig: default
+      nominatimOsmCB:
         baseConfig: default
       # CNPJ providers
       brasilApiCnpjCB:
@@ -360,6 +441,13 @@ resilience4j:
       # pares). CB isolado para que indisponibilidade do /Moedas não derrube
       # CBs dos providers de cotação — o fallback embutido cobre miss simultâneo.
       cambioMoedasCatalogCB:
+        baseConfig: default
+      # Endpoint público GET /financeiro/cambio/moedas — hedge entre BCB OLINDA
+      # direto e BrasilAPI. CBs isolados para que falha de um proxy não polua
+      # o estado do outro.
+      cambioMoedasBcbCB:
+        baseConfig: default
+      cambioMoedasBrasilApiCB:
         baseConfig: default
       awesomeApiCambioCB:
         baseConfig: default
@@ -455,7 +543,34 @@ resilience4j:
       # ANATEL DDD — download CSV simples; CB único.
       anatelDddCB:
         baseConfig: default
+      # CPTEC providers — hedge entre INPE direto (XML legado) e BrasilAPI.
+      cptecInpeCB:
+        baseConfig: default
+      cptecBrasilApiCB:
+        baseConfig: default
+      # Registro.br providers
+      registroBrOficialCB:
+        baseConfig: default
+      registroBrBrasilApiCB:
+        baseConfig: default
+      # TUSS — BrasilAPI primário, snapshot local de fallback (sem CB próprio
+      # porque é in-memory; o CB cobre só o caminho de rede).
+      tussBrasilApiCB:
+        baseConfig: default
       # ────────────────────────────────────────────────────────────────────
+      # Licitações — GovTech. Um CB por portal isola o estado dos 4
+      # provedores (ComprasNet/PNCP REST, BLL scraping, BNC ajax interno,
+      # Licitanet REST). A cascata sequencial no service faz tolerância a
+      # falha por agregação parcial; o CB protege contra martelar portal
+      # já reconhecido como fora.
+      comprasnetCB:
+        baseConfig: default
+      bllCB:
+        baseConfig: default
+      bncCB:
+        baseConfig: default
+      licitanetCB:
+        baseConfig: default
       # BrasilAPI fallbacks — só acionados quando o tier 1 (consulta direta
       # à fonte oficial) falha. CBs próprios pra que falha do fallback não
       # contamine a percepção dos providers diretos.
@@ -479,13 +594,21 @@ resilience4j:
         timeoutDuration: 3s
         cancelRunningFuture: true
     instances:
-      # CEP providers
+      # CEP providers — tier 1
       viaCepCB:
         baseConfig: default
       brasilApiCB:
         baseConfig: default
       awesomeApiCB:
         baseConfig: default
+      # CEP geo providers — tier 2. Nominatim público é rate-limited (1 req/s)
+      # e tipicamente latente; teto 5s evita pendurar a request quando o
+      # servidor está saturado. BrasilAPI v2 já cacheia internamente — 3s sobra.
+      brasilApiV2GeoCB:
+        baseConfig: default
+      nominatimOsmCB:
+        baseConfig: default
+        timeoutDuration: 5s
       # CNPJ providers
       brasilApiCnpjCB:
         baseConfig: default
@@ -526,6 +649,10 @@ resilience4j:
         timeoutDuration: 15s
       # Catálogo de moedas — chamada simples e leve, default 3s sobra.
       cambioMoedasCatalogCB:
+        baseConfig: default
+      cambioMoedasBcbCB:
+        baseConfig: default
+      cambioMoedasBrasilApiCB:
         baseConfig: default
       awesomeApiCambioCB:
         baseConfig: default
@@ -644,6 +771,36 @@ resilience4j:
       # ANATEL DDD — download CSV pequeno (~few KB); default 3s sobra.
       anatelDddCB:
         baseConfig: default
+      # CPTEC providers — INPE pode picar sob carga matinal; teto 10s para
+      # cobrir parse de XML de capitais (~30KB) com upstream lento.
+      cptecInpeCB:
+        baseConfig: default
+        timeoutDuration: 10s
+      cptecBrasilApiCB:
+        baseConfig: default
+        timeoutDuration: 10s
+      # Registro.br — JSON simples, default 3s sobra.
+      registroBrOficialCB:
+        baseConfig: default
+      registroBrBrasilApiCB:
+        baseConfig: default
+      # TUSS — chamada REST simples; default 3s sobra.
+      tussBrasilApiCB:
+        baseConfig: default
+      # Licitações — GovTech. ComprasNet/PNCP é REST oficial e barato (default
+      # 3s sobra). BLL faz scraping HTML pesado (~600KB de página), eleva
+      # timeout para 12s — alinha com timeout-millis do Jsoup configurado em
+      # gateway.licitacoes.bll. BNC/Licitanet são REST internos, default sobra.
+      comprasnetCB:
+        baseConfig: default
+      bllCB:
+        baseConfig: default
+        timeoutDuration: 12s
+      bncCB:
+        baseConfig: default
+      licitanetCB:
+        baseConfig: default
+        timeoutDuration: 10s
       # BrasilAPI fallbacks — JSON pré-agregado, single round-trip. Default
       # 3s cobre quase tudo. CVM Fundos paginado pode ser ligeiramente mais
       # lento sob carga, mas ainda dentro do default.
