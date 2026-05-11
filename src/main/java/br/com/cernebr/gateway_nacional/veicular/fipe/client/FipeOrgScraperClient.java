@@ -2,10 +2,15 @@ package br.com.cernebr.gateway_nacional.veicular.fipe.client;
 
 import br.com.cernebr.gateway_nacional.config.FlareSolverrInvoker;
 import br.com.cernebr.gateway_nacional.exception.ResourceUnavailableException;
+import br.com.cernebr.gateway_nacional.veicular.fipe.dto.FipeMarcaResponse;
 import br.com.cernebr.gateway_nacional.veicular.fipe.dto.FipePrecoResponse;
+import br.com.cernebr.gateway_nacional.veicular.fipe.dto.FipeTabelaReferenciaResponse;
+import br.com.cernebr.gateway_nacional.veicular.fipe.dto.FipeTipoVeiculo;
+import br.com.cernebr.gateway_nacional.veicular.fipe.dto.FipeVeiculoResponse;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
@@ -13,6 +18,8 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -85,7 +92,7 @@ import java.util.Map;
  */
 @Slf4j
 @Component
-public class FipeOrgScraperClient implements FipeClientProvider {
+public class FipeOrgScraperClient implements FipeClientProvider, FipeNavegacaoProvider {
 
     public static final String PROVIDER_NAME = "FIPE-Oficial";
     static final String FLARE_REQUIRED_MESSAGE =
@@ -100,6 +107,8 @@ public class FipeOrgScraperClient implements FipeClientProvider {
     private static final String API_PATH = "/api/veiculos/";
     private static final String REF_TABLE_PATH = API_PATH + "ConsultarTabelaDeReferencia";
     private static final String VALUE_PATH = API_PATH + "ConsultarValorComTodosParametros";
+    private static final String MARCAS_PATH = API_PATH + "ConsultarMarcas";
+    private static final String MODELOS_PATH = API_PATH + "ConsultarModelos";
 
     private final String baseUrl;
     private final FlareSolverrInvoker flareSolverr;
@@ -162,6 +171,210 @@ public class FipeOrgScraperClient implements FipeClientProvider {
                 codigoFipe, anoModelo, cause.toString());
         throw new ResourceUnavailableException(PROVIDER_NAME,
                 "FIPE oficial indisponível ou Circuit Breaker aberto.", cause);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Navegação FIPE (FipeNavegacaoProvider) — marcas, veículos, tabelas-ref.
+    // Os 3 endpoints abaixo compartilham a mesma session FlareSolverr do
+    // fetchPreco e usam o mesmo CB ({@code fipeOrgScraperCB}) — saturação de
+    // navegação afeta a saúde percebida da cotação, intencional pra que
+    // navegação pesada não destrua o CB sozinha.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Override
+    @CircuitBreaker(name = "fipeOrgScraperCB", fallbackMethod = "fallbackMarcas")
+    public List<FipeMarcaResponse> listMarcas(FipeTipoVeiculo tipo, @Nullable Integer tabelaReferencia) {
+        if (!flareSolverr.isEnabled()) {
+            throw new ResourceUnavailableException(PROVIDER_NAME, FLARE_REQUIRED_MESSAGE);
+        }
+        String session = flareSolverr.createSession();
+        try {
+            flareSolverr.getInSession(baseUrl + "/", session);
+            int refTable = tabelaReferencia != null ? tabelaReferencia : ensureReferenceTable(session);
+            return fetchMarcas(session, tipo, refTable);
+        } finally {
+            flareSolverr.destroySession(session);
+        }
+    }
+
+    @Override
+    @CircuitBreaker(name = "fipeOrgScraperCB", fallbackMethod = "fallbackVeiculos")
+    public List<FipeVeiculoResponse> listVeiculosByMarca(FipeTipoVeiculo tipo,
+                                                        String codigoMarca,
+                                                        @Nullable Integer tabelaReferencia) {
+        if (!flareSolverr.isEnabled()) {
+            throw new ResourceUnavailableException(PROVIDER_NAME, FLARE_REQUIRED_MESSAGE);
+        }
+        String session = flareSolverr.createSession();
+        try {
+            flareSolverr.getInSession(baseUrl + "/", session);
+            int refTable = tabelaReferencia != null ? tabelaReferencia : ensureReferenceTable(session);
+            return fetchVeiculos(session, tipo, codigoMarca, refTable);
+        } finally {
+            flareSolverr.destroySession(session);
+        }
+    }
+
+    @Override
+    @CircuitBreaker(name = "fipeOrgScraperCB", fallbackMethod = "fallbackTabelas")
+    public List<FipeTabelaReferenciaResponse> listTabelasReferencia() {
+        if (!flareSolverr.isEnabled()) {
+            throw new ResourceUnavailableException(PROVIDER_NAME, FLARE_REQUIRED_MESSAGE);
+        }
+        String session = flareSolverr.createSession();
+        try {
+            flareSolverr.getInSession(baseUrl + "/", session);
+            return fetchTabelasReferencia(session);
+        } finally {
+            flareSolverr.destroySession(session);
+        }
+    }
+
+    @SuppressWarnings("unused")
+    private List<FipeMarcaResponse> fallbackMarcas(FipeTipoVeiculo tipo, Integer tabelaReferencia, Throwable cause) {
+        log.warn("FIPE-Oficial fallback marcas tipo={} tabela={} cause={}", tipo, tabelaReferencia, cause.toString());
+        throw new ResourceUnavailableException(PROVIDER_NAME,
+                "FIPE oficial indisponível ou Circuit Breaker aberto (marcas).", cause);
+    }
+
+    @SuppressWarnings("unused")
+    private List<FipeVeiculoResponse> fallbackVeiculos(FipeTipoVeiculo tipo, String codigoMarca,
+                                                      Integer tabelaReferencia, Throwable cause) {
+        log.warn("FIPE-Oficial fallback veiculos tipo={} marca={} tabela={} cause={}",
+                tipo, codigoMarca, tabelaReferencia, cause.toString());
+        throw new ResourceUnavailableException(PROVIDER_NAME,
+                "FIPE oficial indisponível ou Circuit Breaker aberto (veiculos).", cause);
+    }
+
+    @SuppressWarnings("unused")
+    private List<FipeTabelaReferenciaResponse> fallbackTabelas(Throwable cause) {
+        log.warn("FIPE-Oficial fallback tabelas cause={}", cause.toString());
+        throw new ResourceUnavailableException(PROVIDER_NAME,
+                "FIPE oficial indisponível ou Circuit Breaker aberto (tabelas).", cause);
+    }
+
+    /**
+     * POST {@code /api/veiculos/ConsultarMarcas} — devolve {@code [{Label, Value}]}
+     * que mapeamos para {@code [{nome, valor}]}, ordenado por valor numérico crescente
+     * (espelha o {@code .sort((a, b) => parseInt(a.valor) - parseInt(b.valor))} da BrasilAPI).
+     */
+    private List<FipeMarcaResponse> fetchMarcas(String session, FipeTipoVeiculo tipo, int refTable) {
+        Map<String, String> form = new LinkedHashMap<>();
+        form.put("codigoTabelaReferencia", String.valueOf(refTable));
+        form.put("codigoTipoVeiculo", String.valueOf(tipo.fipeCodigoVeiculo()));
+
+        FlareSolverrInvoker.FlareResult result = flareSolverr.postInSession(baseUrl + MARCAS_PATH, form, session);
+        JsonNode array = parseJsonArray(result.jsonBody(), "ConsultarMarcas");
+
+        List<FipeMarcaResponse> marcas = new ArrayList<>(array.size());
+        for (JsonNode item : array) {
+            String nome = textOrEmpty(item, "Label");
+            String valor = textOrEmpty(item, "Value");
+            if (nome.isBlank() || valor.isBlank()) continue;
+            marcas.add(new FipeMarcaResponse(nome, valor));
+        }
+        marcas.sort(Comparator.comparingInt(m -> safeParseInt(m.valor())));
+        return marcas;
+    }
+
+    /**
+     * POST {@code /api/veiculos/ConsultarModelos} — devolve {@code {Modelos: [{Label, Value}], ...}}.
+     * A BrasilAPI dropa o {@code Value} (devolve só {@code modelo}); aqui preservamos os dois,
+     * porque o ID interno é útil pra chamadas subsequentes (ex: refinamento por ano-modelo).
+     */
+    private List<FipeVeiculoResponse> fetchVeiculos(String session, FipeTipoVeiculo tipo,
+                                                   String codigoMarca, int refTable) {
+        Map<String, String> form = new LinkedHashMap<>();
+        form.put("codigoTabelaReferencia", String.valueOf(refTable));
+        form.put("codigoTipoVeiculo", String.valueOf(tipo.fipeCodigoVeiculo()));
+        form.put("codigoMarca", codigoMarca);
+
+        FlareSolverrInvoker.FlareResult result = flareSolverr.postInSession(baseUrl + MODELOS_PATH, form, session);
+        JsonNode root = parseJsonObject(result.jsonBody(), "ConsultarModelos");
+
+        JsonNode modelos = root.get("Modelos");
+        if (modelos == null || !modelos.isArray()) {
+            throw new ResourceUnavailableException(PROVIDER_NAME,
+                    "FIPE-Oficial: ConsultarModelos retornou objeto sem array \"Modelos\".");
+        }
+
+        List<FipeVeiculoResponse> veiculos = new ArrayList<>(modelos.size());
+        for (JsonNode item : modelos) {
+            String nome = textOrEmpty(item, "Label");
+            String valor = textOrEmpty(item, "Value");
+            if (nome.isBlank()) continue;
+            veiculos.add(new FipeVeiculoResponse(nome, valor.isBlank() ? null : valor));
+        }
+        return veiculos;
+    }
+
+    /**
+     * Versão pública de {@link #fetchCurrentReferenceTable(String)} — aquela
+     * devolvia só o código mais recente; aqui devolvemos a lista completa
+     * com ordenação descendente (mais recente primeiro).
+     */
+    private List<FipeTabelaReferenciaResponse> fetchTabelasReferencia(String session) {
+        FlareSolverrInvoker.FlareResult result =
+                flareSolverr.postInSession(baseUrl + REF_TABLE_PATH, Map.of(), session);
+        JsonNode array = parseJsonArray(result.jsonBody(), "ConsultarTabelaDeReferencia");
+
+        List<FipeTabelaReferenciaResponse> tabelas = new ArrayList<>(array.size());
+        for (JsonNode item : array) {
+            JsonNode codigo = item.get("Codigo");
+            if (codigo == null || !codigo.isInt()) continue;
+            String mes = textOrEmpty(item, "Mes").trim();
+            tabelas.add(new FipeTabelaReferenciaResponse(codigo.intValue(), mes));
+        }
+        tabelas.sort(Comparator.comparingInt(FipeTabelaReferenciaResponse::codigo).reversed());
+        return tabelas;
+    }
+
+    private JsonNode parseJsonArray(String body, String operationName) {
+        if (body == null || body.isBlank()) {
+            throw new ResourceUnavailableException(PROVIDER_NAME,
+                    "FIPE-Oficial: corpo vazio em " + operationName + ".");
+        }
+        if (body.contains("resource you are looking for")) {
+            throw new ResourceUnavailableException(PROVIDER_NAME,
+                    "FIPE-Oficial: " + operationName + " devolveu IIS \"resource not found\" — contrato pode ter mudado.");
+        }
+        try {
+            JsonNode node = objectMapper.readTree(body);
+            if (!node.isArray() || node.isEmpty()) {
+                throw new ResourceUnavailableException(PROVIDER_NAME,
+                        "FIPE-Oficial: " + operationName + " devolveu corpo não-array ou vazio.");
+            }
+            return node;
+        } catch (JacksonException ex) {
+            throw new ResourceUnavailableException(PROVIDER_NAME,
+                    "FIPE-Oficial: " + operationName + " corpo não-JSON: " + ex.getMessage(), ex);
+        }
+    }
+
+    private JsonNode parseJsonObject(String body, String operationName) {
+        if (body == null || body.isBlank()) {
+            throw new ResourceUnavailableException(PROVIDER_NAME,
+                    "FIPE-Oficial: corpo vazio em " + operationName + ".");
+        }
+        if (body.contains("resource you are looking for")) {
+            throw new ResourceUnavailableException(PROVIDER_NAME,
+                    "FIPE-Oficial: " + operationName + " devolveu IIS \"resource not found\" — contrato pode ter mudado.");
+        }
+        try {
+            JsonNode node = objectMapper.readTree(body);
+            if (!node.isObject()) {
+                throw new ResourceUnavailableException(PROVIDER_NAME,
+                        "FIPE-Oficial: " + operationName + " devolveu corpo não-objeto.");
+            }
+            return node;
+        } catch (JacksonException ex) {
+            throw new ResourceUnavailableException(PROVIDER_NAME,
+                    "FIPE-Oficial: " + operationName + " corpo não-JSON: " + ex.getMessage(), ex);
+        }
+    }
+
+    private static int safeParseInt(String s) {
+        try { return Integer.parseInt(s); } catch (NumberFormatException ex) { return Integer.MAX_VALUE; }
     }
 
     /**
