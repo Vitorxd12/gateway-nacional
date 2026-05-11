@@ -2,10 +2,12 @@ package br.com.cernebr.gateway_nacional.financeiro.cambio.service;
 
 import br.com.cernebr.gateway_nacional.config.HedgedExecutor;
 import br.com.cernebr.gateway_nacional.config.HedgedExecutor.NamedSupplier;
+import br.com.cernebr.gateway_nacional.exception.ResourceNotFoundException;
 import br.com.cernebr.gateway_nacional.exception.ResourceUnavailableException;
 import br.com.cernebr.gateway_nacional.financeiro.cambio.client.BcbOlindaCambioClient;
 import br.com.cernebr.gateway_nacional.financeiro.cambio.client.BrasilApiCambioClient;
 import br.com.cernebr.gateway_nacional.financeiro.cambio.client.CambioClient;
+import br.com.cernebr.gateway_nacional.financeiro.cambio.client.CambioPtaxClientProvider;
 import br.com.cernebr.gateway_nacional.financeiro.cambio.dto.CambioEnvelope;
 import br.com.cernebr.gateway_nacional.financeiro.cambio.dto.CambioResponse;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -14,9 +16,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -121,6 +125,77 @@ public class CambioService {
             unified.addSuppressed(ptaxFailure);
             throw unified;
         }
+    }
+
+    /**
+     * Resolve o PTAX histórico para uma moeda em uma data específica.
+     *
+     * <h2>Cascata, não hedge</h2>
+     * <p>Aqui a cascata é deliberada — o resultado tem três desfechos
+     * semanticamente distintos que o hedge colapsaria em apenas dois:</p>
+     * <ul>
+     *   <li><b>Provider devolveu cotação</b> → 200;</li>
+     *   <li><b>Todos os providers confirmaram empty</b> (não há publicação para
+     *       essa data) → <b>404 determinístico</b>;</li>
+     *   <li><b>Pelo menos um provider falhou</b> (rede, CB) e nenhum confirmou
+     *       a ausência → <b>503</b>, com instrução para o cliente retentar.</li>
+     * </ul>
+     *
+     * <p>Mesmo padrão do {@code NcmService}: hedge devolveria 503 mesmo em
+     * caso de "data sem publicação", o que enganaria o cliente e estouraria
+     * cache (404 cacheia, 503 não).</p>
+     *
+     * <p><b>Ordem da cascata:</b> BrasilAPI → BCB OLINDA. A BrasilAPI já
+     * cachea o snapshot do BCB internamente, então a chamada típica é mais
+     * rápida; o BCB OLINDA é a fonte canônica usada como rede de proteção.</p>
+     *
+     * <h2>Cache</h2>
+     * <p>{@code cambioHistorico} hard-TTL 365d (configurado em {@link br.com.cernebr.gateway_nacional.config.CacheConfig}).
+     * Fixings de datas passadas são, por definição, frozen — não há razão
+     * para refresh.</p>
+     */
+    @Cacheable(cacheNames = "cambioHistorico",
+            key = "#moeda.toUpperCase() + ':' + #data.toString()")
+    public CambioResponse consultarPorData(String moeda, LocalDate data) {
+        String moedaUpper = moeda.toUpperCase(Locale.ROOT);
+        boolean anyProviderUnavailable = false;
+        Throwable lastFailure = null;
+
+        for (CambioPtaxClientProvider provider : List.<CambioPtaxClientProvider>of(brasilApiPtax, bcbOlindaPtax)) {
+            Timer.Sample sample = Timer.start(meterRegistry);
+            try {
+                Optional<CambioResponse> hit = provider.fetchPtaxByDate(moedaUpper, data);
+                if (hit.isPresent()) {
+                    recordOutcome(provider.providerName(), "success", sample);
+                    log.info("PTAX histórico {} {} resolvido por provider={}",
+                            moedaUpper, data, provider.providerName());
+                    return hit.get();
+                }
+                recordOutcome(provider.providerName(), "not-found", sample);
+                log.debug("PTAX histórico {} {} sem publicação em provider={}",
+                        moedaUpper, data, provider.providerName());
+            } catch (ResourceUnavailableException ex) {
+                anyProviderUnavailable = true;
+                lastFailure = ex;
+                recordOutcome(provider.providerName(), "failure", sample);
+                log.warn("Provider {} falhou para PTAX {} {} ({}). Cascata para o próximo.",
+                        provider.providerName(), moedaUpper, data, ex.getMessage());
+            }
+        }
+
+        if (!anyProviderUnavailable) {
+            // Todos os providers responderam consistentemente "sem publicação".
+            // 404 cacheável — relatórios mensais/trimestrais que perguntam por
+            // datas inexistentes não bombardeiam upstream.
+            throw new ResourceNotFoundException("CambioHistorico",
+                    "BCB não publicou PTAX para " + moedaUpper + " em " + data
+                            + " (verifique se é dia útil bancário).");
+        }
+
+        throw new ResourceUnavailableException("cambioHistorico",
+                "Tanto BrasilAPI PTAX quanto BCB OLINDA falharam ao consultar PTAX histórico de "
+                        + moedaUpper + " em " + data + ".",
+                lastFailure);
     }
 
     /**

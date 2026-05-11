@@ -11,6 +11,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Pattern;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.validation.annotation.Validated;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
 import java.util.List;
 
 @Validated
@@ -96,5 +98,58 @@ public class CambioController {
             String pares
     ) {
         return cambioService.consultar(pares).cotacoes();
+    }
+
+    @GetMapping(value = "/{moeda}/{data}", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "Consultar PTAX histórico de uma moeda em uma data específica",
+            description = """
+                    Devolve o "Fechamento PTAX" oficial do Banco Central para a \
+                    moeda informada na data exata — sem retry retroativo. Para \
+                    a cotação atual (D-1 com retrocesso automático), use \
+                    {@code GET /api/v1/financeiro/cambio/{pares}}.
+
+                    **Casos de uso típicos:**
+                    - Cálculo de Imposto de Renda em operações em moeda estrangeira;
+                    - Conversão de valores em balanço contábil consolidado;
+                    - Auditoria de contratos com cláusula cambial;
+                    - Reemissão retroativa de NF-e que exige a PTAX da data \
+                      efetiva da operação.
+
+                    **Engine de Resiliência:**
+                    - **Cascata** (não hedge — para distinguir 404 de 503): \
+                      BrasilAPI primeiro, BCB OLINDA segundo.
+                    - **Semântica de saída:** 200 com o boletim; **404** quando \
+                      ambos providers confirmam que NÃO houve publicação na data \
+                      (ex.: fim de semana, feriado bancário, data anterior ao \
+                      início da PTAX para a moeda); **503** quando ao menos um \
+                      provider está fora e a confirmação determinística é \
+                      impossível.
+                    - **Cache:** {@code cambioHistorico} hard-TTL 365d — fixings \
+                      antigos são frozen por definição."""
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "PTAX histórico resolvido",
+                    content = @Content(schema = @Schema(implementation = CambioResponse.class))),
+            @ApiResponse(responseCode = "400", description = "Moeda ou data em formato inválido",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "404", description = "BCB não publicou PTAX para a moeda/data",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "503", description = "Ambos os providers PTAX estão indisponíveis",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))
+    })
+    public CambioResponse consultarPorData(
+            @Parameter(description = "Código ISO da moeda em UPPERCASE (ex.: USD, EUR, GBP). Deve estar no catálogo PTAX — ver /cambio/moedas.",
+                    example = "USD", required = true)
+            @PathVariable
+            @Pattern(regexp = "[A-Za-z]{3,4}", message = "Moeda deve ser código ISO 3-4 letras (ex.: USD).")
+            String moeda,
+            @Parameter(description = "Data ISO yyyy-MM-dd. Deve ser passada (futuro não é suportado pelo BCB).",
+                    example = "2024-05-10", required = true)
+            @PathVariable
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            LocalDate data
+    ) {
+        return cambioService.consultarPorData(moeda, data);
     }
 }

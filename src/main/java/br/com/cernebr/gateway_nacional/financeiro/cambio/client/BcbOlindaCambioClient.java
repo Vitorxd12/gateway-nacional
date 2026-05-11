@@ -16,6 +16,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -102,6 +103,16 @@ public class BcbOlindaCambioClient implements CambioPtaxClientProvider {
     }
 
     @Override
+    @CircuitBreaker(name = "cambioBcbOlindaCB", fallbackMethod = "fallbackByDate")
+    public Optional<CambioResponse> fetchPtaxByDate(String moeda, LocalDate data) {
+        // Honra a data exata — sem retry retroativo. Empty é resposta legítima
+        // (não-publicação) e o CambioService trata como 404 determinístico.
+        CambioPair pair = CambioPair.parse(moeda + "-BRL", catalogService.supportedCurrencies());
+        BcbBoletim boletim = fetchSingle(pair, data);
+        return Optional.ofNullable(boletim).map(b -> toResponse(pair, b));
+    }
+
+    @Override
     public String providerName() {
         return PROVIDER_NAME;
     }
@@ -111,6 +122,14 @@ public class BcbOlindaCambioClient implements CambioPtaxClientProvider {
         log.warn("BCB OLINDA fallback triggered for pares={} cause={}", pares, cause.toString());
         throw new ResourceUnavailableException(PROVIDER_NAME,
                 "BCB OLINDA indisponível ou Circuit Breaker aberto.", cause);
+    }
+
+    @SuppressWarnings("unused")
+    private Optional<CambioResponse> fallbackByDate(String moeda, LocalDate data, Throwable cause) {
+        log.warn("BCB OLINDA fallbackByDate triggered for moeda={} data={} cause={}",
+                moeda, data, cause.toString());
+        throw new ResourceUnavailableException(PROVIDER_NAME,
+                "BCB OLINDA indisponível ou Circuit Breaker aberto (PTAX histórico).", cause);
     }
 
     /**

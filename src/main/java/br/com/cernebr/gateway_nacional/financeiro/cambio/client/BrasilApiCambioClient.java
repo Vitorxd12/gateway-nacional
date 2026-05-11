@@ -18,6 +18,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -79,6 +80,50 @@ public class BrasilApiCambioClient implements CambioPtaxClientProvider {
     }
 
     @Override
+    @CircuitBreaker(name = "cambioBrasilApiCB", fallbackMethod = "fallbackByDate")
+    public Optional<CambioResponse> fetchPtaxByDate(String moeda, LocalDate data) {
+        // Mesma rota da BrasilAPI já usada por fetchPtax(), mas honrando a data
+        // exata informada — sem D-1 nem retry retroativo. Empty é resposta
+        // legítima para datas sem publicação.
+        CambioPair pair = CambioPair.parse(moeda + "-BRL", catalogService.supportedCurrencies());
+        BrasilApiCambioPayload payload;
+        try {
+            payload = restClient.get()
+                    .uri("/api/cambio/v1/cotacao/{moeda}/{data}",
+                            pair.moedaOrigem(), data.format(ISO_DATE))
+                    .retrieve()
+                    .body(BrasilApiCambioPayload.class);
+        } catch (HttpClientErrorException.NotFound e) {
+            // O upstream devolve 404 quando a data não tem boletins — semântica
+            // de "não publicou", não de "estamos fora do ar". Empty.
+            return Optional.empty();
+        } catch (HttpClientErrorException ex) {
+            throw new ResourceUnavailableException(PROVIDER_NAME,
+                    "BrasilAPI PTAX devolveu HTTP " + ex.getStatusCode().value()
+                            + " para " + pair.moedaOrigem() + "/" + data,
+                    ex);
+        }
+
+        if (payload == null || payload.cotacoes() == null || payload.cotacoes().isEmpty()) {
+            return Optional.empty();
+        }
+
+        BrasilApiPtaxBoletim chosen = payload.cotacoes().stream()
+                .filter(b -> b.tipoBoletim() != null && b.tipoBoletim().toUpperCase().contains("FECHAMENTO"))
+                .findFirst()
+                .orElse(payload.cotacoes().get(payload.cotacoes().size() - 1));
+
+        return Optional.of(new CambioResponse(
+                pair.moedaOrigem(),
+                pair.moedaDestino(),
+                chosen.cotacaoCompra(),
+                chosen.cotacaoVenda(),
+                null,
+                parseDataHora(chosen.dataHoraCotacao())
+        ));
+    }
+
+    @Override
     public String providerName() {
         return PROVIDER_NAME;
     }
@@ -88,6 +133,14 @@ public class BrasilApiCambioClient implements CambioPtaxClientProvider {
         log.warn("BrasilAPI PTAX fallback triggered for pares={} cause={}", pares, cause.toString());
         throw new ResourceUnavailableException(PROVIDER_NAME,
                 "BrasilAPI PTAX indisponível ou Circuit Breaker aberto.", cause);
+    }
+
+    @SuppressWarnings("unused")
+    private Optional<CambioResponse> fallbackByDate(String moeda, LocalDate data, Throwable cause) {
+        log.warn("BrasilAPI PTAX fallbackByDate triggered for moeda={} data={} cause={}",
+                moeda, data, cause.toString());
+        throw new ResourceUnavailableException(PROVIDER_NAME,
+                "BrasilAPI PTAX indisponível ou Circuit Breaker aberto (PTAX histórico).", cause);
     }
 
     private CambioResponse fetchSinglePair(CambioPair pair, LocalDate date) {

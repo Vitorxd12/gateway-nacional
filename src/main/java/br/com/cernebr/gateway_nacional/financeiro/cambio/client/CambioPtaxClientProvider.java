@@ -2,7 +2,9 @@ package br.com.cernebr.gateway_nacional.financeiro.cambio.client;
 
 import br.com.cernebr.gateway_nacional.financeiro.cambio.dto.CambioResponse;
 
+import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Contrato dos providers de cotação PTAX (oficial Banco Central).
@@ -38,6 +40,35 @@ public interface CambioPtaxClientProvider {
      *         de cascata para o fallback AwesomeAPI.
      */
     List<CambioResponse> fetchPtax(String pares);
+
+    /**
+     * Resolve a PTAX para uma moeda específica em uma data específica — sem
+     * retry retroativo. Diferente de {@link #fetchPtax(String)}, que sempre
+     * retorna a cotação mais recente (D-1 com retrocesso automático), este
+     * método honra a data passada e devolve {@link Optional#empty()} se o BCB
+     * não publicou cotação naquela data (fim de semana, feriado bancário, ou
+     * data anterior à existência da PTAX para essa moeda).
+     *
+     * <p><b>Semântica das saídas:</b></p>
+     * <ul>
+     *   <li>{@code Optional<CambioResponse>} preenchido — boletim resolvido
+     *       (preferindo "Fechamento PTAX"); o {@code CambioService} responde 200;</li>
+     *   <li>{@code Optional.empty()} — upstream confirmou que NÃO há
+     *       publicação para a data; o {@code CambioService} segue para o
+     *       próximo provider e, se todos retornarem empty, responde 404
+     *       determinístico via {@code ResourceNotFoundException};</li>
+     *   <li>{@link br.com.cernebr.gateway_nacional.exception.ResourceUnavailableException} —
+     *       falha de rede / Circuit Breaker aberto. O {@code CambioService}
+     *       cascateia para o próximo provider; se todos falharem, devolve 503.</li>
+     * </ul>
+     *
+     * <p>O par destino é sempre {@code BRL} (PTAX só publica vs Real); o
+     * caller passa apenas a moeda de origem.</p>
+     *
+     * @param moeda código ISO em UPPERCASE (ex.: {@code "USD"})
+     * @param data  data de referência (deve ser passada — futuro não é suportado)
+     */
+    Optional<CambioResponse> fetchPtaxByDate(String moeda, LocalDate data);
 
     String providerName();
 }
