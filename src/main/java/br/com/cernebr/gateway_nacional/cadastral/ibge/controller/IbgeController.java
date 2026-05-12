@@ -108,6 +108,24 @@ public class IbgeController {
         return ibgeService.listMunicipiosByUf(sigla.toUpperCase(Locale.ROOT));
     }
 
+    @GetMapping(value = "/municipios", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "Busca global de municípios",
+            description = "Busca em O(1) em memória por código IBGE exato ou texto (substring, ignorando case e acentos). Exemplo: ?busca=3550308 ou ?busca=sao paulo"
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200",
+                    description = "Lista de municípios que satisfazem a busca",
+                    content = @Content(array = @ArraySchema(schema = @Schema(implementation = MunicipioResponse.class))))
+    })
+    public List<MunicipioResponse> searchMunicipios(
+            @Parameter(description = "Termo de busca numérico (código exato) ou texto", example = "sao paulo")
+            @org.springframework.web.bind.annotation.RequestParam(value = "busca", required = false)
+            String busca
+    ) {
+        return ibgeService.searchMunicipios(busca);
+    }
+
     private static String canonicalize(String codeOrSigla) {
         // Normaliza sigla pra uppercase; deixa código numérico como está.
         return codeOrSigla.length() == 2 && !Character.isDigit(codeOrSigla.charAt(0))

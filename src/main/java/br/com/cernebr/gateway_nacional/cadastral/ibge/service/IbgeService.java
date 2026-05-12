@@ -21,6 +21,15 @@ import java.time.Duration;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.io.InputStream;
+import java.text.Normalizer;
+
+import tools.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
+import org.springframework.core.io.ClassPathResource;
 
 /**
  * Resolve dados geográficos do IBGE com cache agressivo (RAC) e cascata
@@ -68,17 +77,48 @@ public class IbgeService {
     private final BrasilApiIbgeClient brasilApiFallbackClient;
     private final HedgedExecutor hedgedExecutor;
     private final RefreshAheadCache refreshAheadCache;
+    private final ObjectMapper objectMapper;
+
+    private final Map<String, MunicipioResponse> municipioByCodeIndex = new ConcurrentHashMap<>();
+    private final List<MunicipioIndexEntry> allMunicipiosIndex = new CopyOnWriteArrayList<>();
+
+    private record MunicipioIndexEntry(MunicipioResponse municipio, String normalizedName) {}
+    private record MunicipioJsonDto(String uf, String localidade, String ibge) {}
 
     public IbgeService(IbgeGovClient govClient,
                        DadosAbertosBrClient dadosAbertosBrClient,
                        BrasilApiIbgeClient brasilApiFallbackClient,
                        HedgedExecutor hedgedExecutor,
-                       RefreshAheadCache refreshAheadCache) {
+                       RefreshAheadCache refreshAheadCache,
+                       ObjectMapper objectMapper) {
         this.govClient = govClient;
         this.dadosAbertosBrClient = dadosAbertosBrClient;
         this.brasilApiFallbackClient = brasilApiFallbackClient;
         this.hedgedExecutor = hedgedExecutor;
         this.refreshAheadCache = refreshAheadCache;
+        this.objectMapper = objectMapper;
+    }
+
+    @PostConstruct
+    public void initMunicipiosIndex() {
+        try (InputStream is = new ClassPathResource("data/municipios_ibge.json").getInputStream()) {
+            List<MunicipioJsonDto> rawList = objectMapper.readValue(is, 
+                objectMapper.getTypeFactory().constructCollectionType(List.class, MunicipioJsonDto.class));
+            for (MunicipioJsonDto dto : rawList) {
+                MunicipioResponse resp = new MunicipioResponse(dto.localidade().toUpperCase(Locale.ROOT), dto.ibge());
+                municipioByCodeIndex.put(resp.codigoIbge(), resp);
+                allMunicipiosIndex.add(new MunicipioIndexEntry(resp, removeAccents(dto.localidade()).toLowerCase(Locale.ROOT)));
+            }
+            log.info("Indexados {} municípios em memória com sucesso.", municipioByCodeIndex.size());
+        } catch (Exception e) {
+            log.error("Erro ao carregar data/municipios_ibge.json no startup", e);
+        }
+    }
+
+    private static String removeAccents(String str) {
+        if (str == null) return null;
+        return Normalizer.normalize(str, Normalizer.Form.NFD)
+                .replaceAll("\\p{InCombiningDiacriticalMarks}+", "");
     }
 
     public List<UfResponse> listAllUfs() {
@@ -140,6 +180,48 @@ public class IbgeService {
                 CACHE_MUNICIPIOS, siglaUf, MUNICIPIOS_SOFT_TTL,
                 () -> loadMunicipiosFromCascade(siglaUf));
         return envelope.municipios();
+    }
+
+    public List<MunicipioResponse> searchMunicipios(String termo) {
+        if (termo == null || termo.isBlank()) {
+            return List.of();
+        }
+
+        String t = termo.trim();
+        if (t.matches("\\d+")) {
+            MunicipioResponse found = municipioByCodeIndex.get(t);
+            if (found != null) {
+                return List.of(found);
+            }
+            // Cascateia pra API caso não ache na base local
+            return refreshAheadCache.get(
+                CACHE_MUNICIPIOS, "code:" + t, MUNICIPIOS_SOFT_TTL,
+                () -> loadSingleMunicipioFromCascade(t)
+            ).municipios();
+        } else {
+            String searchTerm = removeAccents(t).toLowerCase(Locale.ROOT);
+            return allMunicipiosIndex.stream()
+                    .filter(e -> e.normalizedName().contains(searchTerm))
+                    .map(MunicipioIndexEntry::municipio)
+                    .sorted(Comparator.comparing(MunicipioResponse::nome))
+                    .toList();
+        }
+    }
+
+    private MunicipiosEnvelope loadSingleMunicipioFromCascade(String codigoIbge) {
+        // Fallback pra IBGE oficial ou Brasil API. Como o IbgeGovClient não tem find by code, 
+        // mas foi adicionado abaixo ou a gente usa o que tem. 
+        // Na verdade a instrução diz para adicionar a malha.
+        // Já vamos usar o fallback direto caso precisemos.
+        try {
+            // Tenta achar via govClient se implementamos, senao vai falhar pro Brasil API
+            // Mas vamos assumir que o govClient vai ter findMunicipioByCode ou então o BrasilAPI tem
+            // Como BrasilAPI tem list by uf e não find by ibge, só vamos tentar o govClient.
+            return new MunicipiosEnvelope(List.of(govClient.findMunicipioByCode(codigoIbge)));
+        } catch (ResourceUnavailableException tier1Failure) {
+            log.info("IBGE-Gov findMunicipioByCode indisponível ({}). Não há fallback viável.", tier1Failure.getMessage());
+            throw unify(tier1Failure, new RuntimeException("Nenhum provider encontrou " + codigoIbge), "findMunicipioByCode");
+        }
     }
 
     /**

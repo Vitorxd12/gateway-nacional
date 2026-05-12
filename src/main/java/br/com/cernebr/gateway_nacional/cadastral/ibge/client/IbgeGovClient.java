@@ -104,6 +104,23 @@ public class IbgeGovClient implements IbgeMunicipiosClientProvider {
         return raw.toUnified();
     }
 
+    @CircuitBreaker(name = "ibgeGovMunicipiosCB", fallbackMethod = "fallbackMunicipio")
+    public MunicipioResponse findMunicipioByCode(String code) {
+        MunicipioPayload raw;
+        try {
+            raw = restClient.get()
+                    .uri("/api/v1/localidades/municipios/{municipio}", code)
+                    .retrieve()
+                    .body(MunicipioPayload.class);
+        } catch (HttpClientErrorException.NotFound nf) {
+            throw new ResourceUnavailableException(PROVIDER_NAME, "IBGE-Gov não localizou município: " + code, nf);
+        }
+        if (raw == null || raw.id() == null) {
+            throw new ResourceUnavailableException(PROVIDER_NAME, "IBGE-Gov retornou corpo vazio para município: " + code);
+        }
+        return new MunicipioResponse(raw.nome() == null ? null : raw.nome().toUpperCase(java.util.Locale.ROOT), String.valueOf(raw.id()));
+    }
+
     @Override
     @CircuitBreaker(name = "ibgeGovMunicipiosCB", fallbackMethod = "fallbackMunicipios")
     public List<MunicipioResponse> fetchByUf(String siglaUf) {
@@ -161,6 +178,13 @@ public class IbgeGovClient implements IbgeMunicipiosClientProvider {
         log.warn("IBGE-Gov findUf fallback for code={} cause={}", codeOrSigla, cause.toString());
         throw new ResourceUnavailableException(PROVIDER_NAME,
                 "IBGE-Gov indisponível ou Circuit Breaker aberto (findUf).", cause);
+    }
+
+    @SuppressWarnings("unused")
+    private MunicipioResponse fallbackMunicipio(String code, Throwable cause) {
+        log.warn("IBGE-Gov findMunicipio fallback for code={} cause={}", code, cause.toString());
+        throw new ResourceUnavailableException(PROVIDER_NAME,
+                "IBGE-Gov indisponível ou Circuit Breaker aberto (findMunicipio).", cause);
     }
 
     @SuppressWarnings("unused")
