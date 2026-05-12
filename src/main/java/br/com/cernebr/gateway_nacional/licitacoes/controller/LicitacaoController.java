@@ -15,6 +15,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Pattern;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -87,7 +88,7 @@ public class LicitacaoController {
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))
             )
     })
-    public LicitacoesAtivasPage listarAtivas(
+    public ResponseEntity<LicitacoesAtivasPage> listarAtivas(
             @Parameter(description = "Restringe a um único portal (slug). Default: agrega todos.",
                     example = "comprasnet",
                     schema = @Schema(allowableValues = {"comprasnet", "bll", "bnc", "licitanet"}))
@@ -114,7 +115,20 @@ public class LicitacaoController {
                     message = "modalidade fora do vocabulário canônico — consulte o enum Modalidade.")
             String modalidade
     ) {
-        return licitacoesService.listarAtivas(portal, uf, modalidade);
+        LicitacoesAtivasPage page = licitacoesService.listarAtivas(portal, uf, modalidade);
+        // X-Cascade / X-Portais-Respondidos: a docs page do frontend usa
+        // esses headers para acender o badge de degradação no topo da UI
+        // sem precisar parsear o body. Mantemos o JSON intacto (campos
+        // portaisRespondidos/portaisFalhos seguem para clients que
+        // preferem o envelope).
+        String respondidos = String.join(",", page.portaisRespondidos());
+        String falhos = String.join(",", page.portaisFalhos());
+        String cascade = page.portaisFalhos().isEmpty() ? "full" : "partial";
+        return ResponseEntity.ok()
+                .header("X-Cascade", cascade)
+                .header("X-Portais-Respondidos", respondidos)
+                .header("X-Portais-Falhos", falhos)
+                .body(page);
     }
 
     @GetMapping(value = "/{portal}/{identificador}", produces = MediaType.APPLICATION_JSON_VALUE)
