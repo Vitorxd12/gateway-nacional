@@ -37,3 +37,5 @@ AutoAPSFinancias/
 
 .claude/
 tmp/
+.pid
+startup.log
