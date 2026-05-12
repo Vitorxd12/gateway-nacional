@@ -307,21 +307,15 @@ gateway:
       base-url: https://pncp.gov.br
     bll:
       # Bolsa de Licitações e Leilões — concentra prefeituras e estatais.
-      # Sem API pública: scraping HTML via Jsoup sobre /processos.
-      base-url: https://bll.org.br
+      # Sem API pública: scraping HTML via Jsoup sobre /Process/ProcessSearchPublic.
+      base-url: https://bllcompras.com
       user-agent: Mozilla/5.0 (compatible; GatewayNacional/1.0)
       timeout-millis: 8000
     bnc:
-      # Bolsa Nacional de Compras — privada, forte presença Sul/Sudeste.
-      # A SPA pública consome /api/painel/processos (JSON ajax interno).
-      # Interceptamos esse endpoint para extração estável.
-      base-url: https://www.bnc.org.br
+      base-url: https://bnccompras.com
     licitanet:
-      # Licitanet — marketplace privado focado em pregão eletrônico.
-      # API REST interna acessível sem credencial para consulta de
-      # processos publicados (status=PUBLICADO).
-      api-base-url: https://api.licitanet.com.br
-      public-base-url: https://app.licitanet.com.br
+      api-base-url: https://www.licitanet.com.br
+      public-base-url: https://www.licitanet.com.br
   avaliacao:
     # Marketplaces consultados via Web Scraping. URLs e templates são
     # configuráveis porque a estrutura dos sites muda — basta sobrescrever
