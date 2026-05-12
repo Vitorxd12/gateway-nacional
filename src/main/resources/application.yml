@@ -32,6 +32,12 @@ server:
 gateway:
   rate-limit:
     enabled: false # Mantido desativado por padrão para uso corporativo (Self-Hosted). Para o Playground público, injetar env GATEWAY_RATE_LIMIT_ENABLED=true
+  captcha:
+    solver:
+      # Provider de resolução de reCAPTCHA: capsolver (padrão) | 2captcha
+      # Necessário para BLL/BNC filtragem por UF via AJAX (sem chave: 100 itens SSR).
+      provider: ${GATEWAY_CAPTCHA_SOLVER_PROVIDER:capsolver}
+      key: ${GATEWAY_CAPTCHA_SOLVER_KEY:}
   flaresolverr:
     # URL do sidecar FlareSolverr (https://github.com/FlareSolverr/FlareSolverr).
     # OPCIONAL para o módulo Placa (fallback PlacaFipe). OBRIGATÓRIO para
@@ -306,13 +312,17 @@ gateway:
       # /api/consulta/v1/contratacoes/proposta.
       base-url: https://pncp.gov.br
     bll:
-      # Bolsa de Licitações e Leilões — concentra prefeituras e estatais.
-      # Sem API pública: scraping HTML via Jsoup sobre /Process/ProcessSearchPublic.
+      # Bolsa de Licitações e Leilões. Scraping HTML da página pública:
+      # 100 itens SSR sem captcha. Com GATEWAY_CAPTCHA_SOLVER_KEY configurado,
+      # ativa a busca filtrada por UF via /Process/GetProcessByParams.
       base-url: https://bllcompras.com
-      user-agent: Mozilla/5.0 (compatible; GatewayNacional/1.0)
-      timeout-millis: 8000
+      user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36
+      timeout-millis: 12000
     bnc:
+      # BNC usa a mesma plataforma ASP.NET da BLL (endpoints idênticos).
       base-url: https://bnccompras.com
+      user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36
+      timeout-millis: 12000
     licitanet:
       api-base-url: https://www.licitanet.com.br
       public-base-url: https://www.licitanet.com.br
@@ -789,9 +799,10 @@ resilience4j:
         baseConfig: default
       bllCB:
         baseConfig: default
-        timeoutDuration: 12s
+        timeoutDuration: 70s   # cobre captcha solver (até ~60s) + scraping inicial (~3s)
       bncCB:
         baseConfig: default
+        timeoutDuration: 70s
       licitanetCB:
         baseConfig: default
         timeoutDuration: 10s
