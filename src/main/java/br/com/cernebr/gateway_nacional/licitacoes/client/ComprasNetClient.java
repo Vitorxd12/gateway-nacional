@@ -63,7 +63,10 @@ public class ComprasNetClient implements LicitacaoClient {
 
     public ComprasNetClient(RestClient.Builder builder,
                             @Value("${gateway.licitacoes.comprasnet.base-url:https://pncp.gov.br}") String baseUrl) {
-        this.restClient = builder.baseUrl(baseUrl).build();
+        this.restClient = builder.baseUrl(baseUrl)
+                .defaultHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+                .defaultHeader("Accept", "application/json")
+                .build();
     }
 
     @Override
@@ -125,24 +128,12 @@ public class ComprasNetClient implements LicitacaoClient {
         String ano = partes[1];
         String sequencial = partes[2];
 
+        PncpContratacao contratacao;
         try {
-            PncpContratacao contratacao = restClient.get()
+            contratacao = restClient.get()
                     .uri("/api/consulta/v1/orgaos/{cnpj}/compras/{ano}/{seq}", cnpj, ano, sequencial)
                     .retrieve()
                     .body(CONTRATACAO_TYPE);
-
-            if (contratacao == null) {
-                return Optional.empty();
-            }
-
-            List<PncpItem> itens = Optional.ofNullable(
-                    restClient.get()
-                            .uri("/api/consulta/v1/orgaos/{cnpj}/compras/{ano}/{seq}/itens", cnpj, ano, sequencial)
-                            .retrieve()
-                            .body(ITENS_TYPE)
-            ).orElse(List.of());
-
-            return Optional.of(toDetalhe(contratacao, itens));
         } catch (HttpClientErrorException ex) {
             if (ex.getStatusCode() == HttpStatus.NOT_FOUND) {
                 return Optional.empty();
@@ -150,6 +141,35 @@ public class ComprasNetClient implements LicitacaoClient {
             throw new ResourceUnavailableException(PROVIDER_NAME,
                     "PNCP retornou HTTP " + ex.getStatusCode().value() + " ao buscar detalhe.", ex);
         }
+
+        if (contratacao == null) {
+            return Optional.empty();
+        }
+
+        // A API pública do PNCP (OpenAPI v1) NÃO expõe mais um endpoint
+        // /itens para contratações da consulta unificada — a tentativa
+        // canônica /v1/orgaos/{cnpj}/compras/{ano}/{seq}/itens devolve
+        // 404 sistematicamente desde a deprecação do swagger v2. Tentamos
+        // de forma defensiva (alguns gateways internos ainda servem) e
+        // toleramos qualquer erro: o detalhe principal já é suficiente
+        // para o caso de uso de "abrir o edital", e o link canônico
+        // urlOriginal aponta para a página HTML que tem os itens.
+        List<PncpItem> itens = List.of();
+        try {
+            List<PncpItem> fetched = restClient.get()
+                    .uri("/api/consulta/v1/orgaos/{cnpj}/compras/{ano}/{seq}/itens", cnpj, ano, sequencial)
+                    .retrieve()
+                    .body(ITENS_TYPE);
+            if (fetched != null) itens = fetched;
+        } catch (HttpClientErrorException ex) {
+            // 404 esperado no estado atual do PNCP; demais erros são
+            // tolerados também — fail-soft no enriquecimento de itens.
+            log.debug("PNCP /itens não disponível para {}-{}-{} (HTTP {})", cnpj, ano, sequencial, ex.getStatusCode().value());
+        } catch (RuntimeException ex) {
+            log.debug("PNCP /itens falhou para {}-{}-{}: {}", cnpj, ano, sequencial, ex.toString());
+        }
+
+        return Optional.of(toDetalhe(contratacao, itens));
     }
 
     @SuppressWarnings("unused")
