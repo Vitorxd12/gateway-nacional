@@ -10,6 +10,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.xml.XmlMapper;
+import com.fasterxml.jackson.dataformat.xml.annotation.JacksonXmlElementWrapper;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -27,15 +28,13 @@ import java.util.Optional;
 
 /**
  * Tier 1 — consulta direta ao XML legado do CPTEC/INPE
- * ({@code http://servicos.cptec.inpe.br/XML}). É o único provedor que cobre
+ * ({@code https://servicos.cptec.inpe.br/XML}). É o único provedor que cobre
  * 100% das rotas de clima brasileiras com dados de primeira mão; a
  * BrasilAPI atua como camada de redundância.
  *
- * <p><b>Por que HTTP (não HTTPS):</b> o INPE não publica certificado TLS no
- * subdomínio {@code servicos.cptec.inpe.br}. A BrasilAPI consome via HTTP
- * pelo mesmo motivo (ver {@code services/cptec/constants.js}). O risco de
- * tampering é baixo porque o conteúdo é meteorologia pública e o Circuit
- * Breaker isola a rota se o upstream picar.</p>
+ * <p><b>Por que HTTPS:</b> Historicamente o INPE não possuía certificado
+ * TLS, forçando o uso de HTTP. Atualmente, o servidor redireciona requisições
+ * (301 Moved Permanently) para HTTPS, exigindo a comunicação segura.</p>
  *
  * <p><b>XML parser:</b> usamos {@link XmlMapper} configurado para ignorar
  * propriedades desconhecidas — o esquema CPTEC é frouxo e adiciona campos
@@ -51,7 +50,7 @@ public class CptecInpeClient implements CptecClientProvider {
     private final XmlMapper xmlMapper;
 
     public CptecInpeClient(RestClient.Builder builder,
-                           @Value("${gateway.cptec.inpe.base-url:http://servicos.cptec.inpe.br/XML}") String baseUrl) {
+                           @Value("${gateway.cptec.inpe.base-url:https://servicos.cptec.inpe.br/XML}") String baseUrl) {
         this.restClient = builder.baseUrl(baseUrl)
                 .defaultHeader("Accept", MediaType.APPLICATION_XML_VALUE)
                 .build();
@@ -62,6 +61,32 @@ public class CptecInpeClient implements CptecClientProvider {
     @Override
     public String providerName() {
         return PROVIDER_NAME;
+    }
+
+    @Override
+    @CircuitBreaker(name = "cptecInpeCB", fallbackMethod = "fallbackListAll")
+    public List<CidadeCptecResponse> listAllCidades() {
+        // O INPE não suporta query vazia. Varremos a-z e deduplicamos por ID,
+        // o que cobre o universo de ~5.500 cidades em ~26 requisições leves.
+        Map<Integer, CidadeCptecResponse> byId = new java.util.LinkedHashMap<>();
+        for (char letter = 'a'; letter <= 'z'; letter++) {
+            try {
+                String body = fetchXml("/listaCidades?city=" + letter);
+                CidadesXml parsed = parse(body, CidadesXml.class);
+                if (parsed != null && parsed.cidades != null) {
+                    for (CidadeXml c : parsed.cidades) {
+                        if (c.id != null) {
+                            byId.putIfAbsent(c.id,
+                                    new CidadeCptecResponse(c.nome, c.uf, CptecCatalogos.regiaoDe(c.uf), c.id));
+                        }
+                    }
+                }
+            } catch (Exception ex) {
+                log.warn("CPTEC-INPE listAllCidades: skip letra '{}' por erro: {}", letter, ex.getMessage());
+            }
+        }
+        log.info("CPTEC-INPE listAllCidades: {} cidades únicas carregadas (varredura a-z).", byId.size());
+        return new java.util.ArrayList<>(byId.values());
     }
 
     @Override
@@ -238,6 +263,10 @@ public class CptecInpeClient implements CptecClientProvider {
 
     // Fallbacks emitem 503 — o CptecService converte em cascata para BrasilAPI.
     @SuppressWarnings("unused")
+    private List<CidadeCptecResponse> fallbackListAll(Throwable cause) {
+        throw new ResourceUnavailableException(PROVIDER_NAME, "CPTEC indisponível (listAll cidades): " + cause.getMessage(), cause);
+    }
+    @SuppressWarnings("unused")
     private List<CidadeCptecResponse> fallbackSearch(String nome, Throwable cause) {
         throw new ResourceUnavailableException(PROVIDER_NAME, "CPTEC indisponível (search cidades): " + cause.getMessage(), cause);
     }
@@ -275,6 +304,7 @@ public class CptecInpeClient implements CptecClientProvider {
     @JsonIgnoreProperties(ignoreUnknown = true)
     private static class CidadesXml {
         @JsonProperty("cidade")
+        @JacksonXmlElementWrapper(useWrapping = false)
         public List<CidadeXml> cidades;
     }
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -286,6 +316,7 @@ public class CptecInpeClient implements CptecClientProvider {
     @JsonIgnoreProperties(ignoreUnknown = true)
     private static class CapitaisXml {
         @JsonProperty("metar")
+        @JacksonXmlElementWrapper(useWrapping = false)
         public List<MetarXml> metar;
     }
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -308,7 +339,9 @@ public class CptecInpeClient implements CptecClientProvider {
         public String nome;
         public String uf;
         public String atualizacao;
-        @JsonProperty("previsao") public List<DiaXml> previsao;
+        @JsonProperty("previsao")
+        @JacksonXmlElementWrapper(useWrapping = false)
+        public List<DiaXml> previsao;
     }
     @JsonIgnoreProperties(ignoreUnknown = true)
     private static class DiaXml {
@@ -323,7 +356,9 @@ public class CptecInpeClient implements CptecClientProvider {
         public String nome;
         public String uf;
         public String atualizacao;
-        @JsonProperty("previsao") public List<OndaXml> previsao;
+        @JsonProperty("previsao")
+        @JacksonXmlElementWrapper(useWrapping = false)
+        public List<OndaXml> previsao;
     }
     @JsonIgnoreProperties(ignoreUnknown = true)
     private static class OndaXml {

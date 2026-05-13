@@ -45,6 +45,32 @@ public class CptecController {
         this.cptecService = cptecService;
     }
 
+    @GetMapping(value = "/cidades", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "Listar todas as cidades CPTEC/INPE",
+            description = """
+                    Retorna o catálogo global de cidades mapeadas no banco do CPTEC/INPE \
+                    (~5.500 cidades brasileiras). Útil para construir lookups locais, \
+                    caches de frontend e selects de cidade em aplicações agro/logística.
+
+                    Fonte primária: **INPE** (query vazia → dump completo). \
+                    Fallback: **BrasilAPI** (mesmo comportamento interno). \
+                    Resultado cacheado em Redis por **1 hora** com chave única \
+                    `cptec::cidades-all` — o banco de cidades do INPE muda raras \
+                    vezes por década, mas o TTL curto garante que adições \
+                    pontuais propaguem rapidamente."""
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Catálogo completo de cidades CPTEC",
+                    content = @Content(array = @ArraySchema(schema = @Schema(implementation = CidadeCptecResponse.class)))),
+            @ApiResponse(responseCode = "503",
+                    description = "INPE e BrasilAPI indisponíveis simultaneamente",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))
+    })
+    public List<CidadeCptecResponse> todasCidades() {
+        return cptecService.listAllCidades();
+    }
+
     @GetMapping(value = "/cidade/{nome}", produces = MediaType.APPLICATION_JSON_VALUE)
     @Operation(
             summary = "Buscar cidades CPTEC por nome",

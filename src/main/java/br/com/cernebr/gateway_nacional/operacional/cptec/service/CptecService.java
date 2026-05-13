@@ -58,6 +58,34 @@ public class CptecService {
         ));
     }
 
+    /**
+     * Retorna o catálogo global de cidades mapeadas no CPTEC/INPE.
+     *
+     * <p>Cascata: <b>INPE direto → BrasilAPI</b>. O INPE devolve todas as cidades
+     * quando a query é vazia; a BrasilAPI não expõe endpoint sem parâmetro,
+     * portanto atua como placeholder (retorna vazio via default do provider).
+     * Resultado cacheado em Redis por <b>24h</b> com chave única
+     * {@code cptec::cidades-all} — o banco de cidades do INPE muda raras
+     * vezes por década.</p>
+     */
+    @Cacheable(cacheNames = CACHE, key = "'cidades-all'")
+    public List<CidadeCptecResponse> listAllCidades() {
+        // Cascata sequencial: INPE é o único que tem o dump completo;
+        // BrasilAPI age como safety net (retorna vazio mas não 503).
+        try {
+            List<CidadeCptecResponse> resultado = inpe.listAllCidades();
+            if (!resultado.isEmpty()) {
+                log.info("CPTEC listAllCidades: {} cidades via INPE direto.", resultado.size());
+                return resultado;
+            }
+        } catch (Exception ex) {
+            log.warn("CPTEC INPE falhou em listAllCidades ({}); tentando BrasilAPI.", ex.getMessage());
+        }
+        List<CidadeCptecResponse> fallback = brasilApi.listAllCidades();
+        log.info("CPTEC listAllCidades: {} cidades via BrasilAPI.", fallback.size());
+        return fallback;
+    }
+
     @Cacheable(cacheNames = CACHE, key = "'capitais:atual'")
     public List<CondicaoAtualResponse> condicoesCapitais() {
         return hedgedExecutor.anyOf(DOMAIN, List.of(

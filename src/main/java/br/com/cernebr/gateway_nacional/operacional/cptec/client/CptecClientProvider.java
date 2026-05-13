@@ -22,6 +22,20 @@ public interface CptecClientProvider {
     /** Pesquisa cidades pelo nome (substring). */
     List<CidadeCptecResponse> searchCidades(String nome);
 
+    /**
+     * Retorna todas as cidades mapeadas no banco CPTEC/INPE.
+     *
+     * <p>O INPE não expõe um endpoint de dump completo documentado;
+     * implementações concretas usam heurística (ex: query vazia ou
+     * wildcard) para obter o catálogo global. Padrão: lista vazia
+     * (cascade para o próximo provider).</p>
+     *
+     * @return lista completa de cidades CPTEC; empty se não suportado.
+     */
+    default List<CidadeCptecResponse> listAllCidades() {
+        return List.of();
+    }
+
     /** Condições atuais (METAR) para todas as capitais brasileiras. */
     List<CondicaoAtualResponse> condicoesCapitais();
 
