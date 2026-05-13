@@ -46,6 +46,8 @@ Cascata: **ViaCEP → BrasilAPI → AwesomeAPI**.
 
 - DTO unificado: `cep`, `logradouro`, `complemento`, `bairro`, `localidade`, `uf`, `ibge`.
 - **Enriquecimento in-memory de IBGE**: quando o provedor que respondeu não devolve o código IBGE do município (caso clássico do BrasilAPI v1), o gateway preenche localmente a partir de um índice in-memory normalizado por `Normalizer.NFD` (acentos e caixa não quebram lookup).
+- **Busca por endereço** (`GET /api/v1/cep/busca`): dado UF + cidade + logradouro, retorna lista de CEPs candidatos via ViaCEP. Útil para autocompletar formulários de endereço.
+- **Geocodificação reversa** (`GET /api/v1/cep/reverso`): dado lat/lon (ex.: clique num mapa Leaflet/Google Maps), retorna o endereço brasileiro e o CEP do ponto via Nominatim/OSM. Campo `localizacao.precisao` sempre `EXATA`.
 - TTL de cache: **30 dias** (CEPs são imutáveis na prática).
 
 ### CNPJ — Dados Cadastrais B2B
@@ -276,7 +278,7 @@ A aplicação fica disponível em `http://localhost:8080`. O Swagger UI em `/swa
 ### CEP — exemplos
 
 ```bash
-# Resolução básica
+# Resolução básica por CEP
 curl http://localhost:8080/api/v1/cep/01001000
 ```
 
@@ -289,6 +291,57 @@ curl http://localhost:8080/api/v1/cep/01001000
   "localidade": "São Paulo",
   "uf": "SP",
   "ibge": "3550308"
+}
+```
+
+```bash
+# Busca por endereço (UF + cidade + logradouro) — retorna lista de candidatos
+curl "http://localhost:8080/api/v1/cep/busca?uf=SP&cidade=S%C3%A3o+Paulo&logradouro=Pra%C3%A7a+da+S%C3%A9"
+```
+
+```json
+{
+  "total": 1,
+  "candidatos": [
+    {
+      "cep": "01001-000",
+      "logradouro": "Praça da Sé",
+      "complemento": "lado ímpar",
+      "bairro": "Sé",
+      "localidade": "São Paulo",
+      "uf": "SP",
+      "ibge": "3550308",
+      "localizacao": null
+    }
+  ]
+}
+```
+
+```bash
+# Geocodificação reversa — clique no mapa → CEP
+curl "http://localhost:8080/api/v1/cep/reverso?lat=-23.5505&lon=-46.6333"
+```
+
+```json
+{
+  "total": 1,
+  "candidatos": [
+    {
+      "cep": "01310-100",
+      "logradouro": "Avenida Paulista",
+      "complemento": null,
+      "bairro": "Bela Vista",
+      "localidade": "São Paulo",
+      "uf": "SP",
+      "ibge": "3550308",
+      "localizacao": {
+        "latitude": -23.5505,
+        "longitude": -46.6333,
+        "precisao": "EXATA",
+        "fonte": "OpenStreetMap-Nominatim-Reverso"
+      }
+    }
+  ]
 }
 ```
 
@@ -632,6 +685,8 @@ curl http://localhost:8080/api/v1/taxas/ipca
 | Método | Rota | Descrição |
 |---|---|---|
 | `GET` | `/api/v1/cep/{cep}` | Resolução de CEP com fallback em cascata. |
+| `GET` | `/api/v1/cep/busca` | Busca de CEPs por endereço textual. Params: `uf`, `cidade`, `logradouro` (todos obrigatórios). |
+| `GET` | `/api/v1/cep/reverso` | Geocodificação reversa: coordenadas → CEP. Params: `lat`, `lon` (obrigatórios, WGS84). |
 | `GET` | `/api/v1/cnpj/{cnpj}` | Resolução de CNPJ com fallback em cascata. |
 | `GET` | `/api/v1/calendario/feriados/{ano}` | Lista de feriados (use `?siglaUf=SP` para incluir estaduais). |
 | `GET` | `/api/v1/calendario/proximo-dia-util` | Próximo dia útil (params: `data=yyyy-MM-dd`, `siglaUf` opcional). |
