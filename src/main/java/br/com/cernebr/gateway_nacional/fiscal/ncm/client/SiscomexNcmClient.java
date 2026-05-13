@@ -86,6 +86,22 @@ public class SiscomexNcmClient implements NcmClientProvider {
     }
 
     @Override
+    @CircuitBreaker(name = "siscomexNcmCB", fallbackMethod = "listAllFallback")
+    public List<NcmResponse> listAll() {
+        JsonNode nomenclaturas = downloadAndExtractList();
+        List<NcmResponse> out = new ArrayList<>();
+        for (JsonNode item : nomenclaturas) {
+            try {
+                out.add(toResponse(item));
+            } catch (Exception ex) {
+                log.debug("Siscomex listAll: item ignorado por erro de parse: {}", ex.getMessage());
+            }
+        }
+        log.info("Siscomex listAll: {} itens carregados do dump oficial.", out.size());
+        return out;
+    }
+
+    @Override
     @CircuitBreaker(name = "siscomexNcmCB", fallbackMethod = "findByCodigoFallback")
     public Optional<NcmResponse> findByCodigo(String codigo) {
         String target = onlyDigits(codigo);
@@ -126,6 +142,13 @@ public class SiscomexNcmClient implements NcmClientProvider {
     @Override
     public String providerName() {
         return PROVIDER_NAME;
+    }
+
+    @SuppressWarnings("unused")
+    private List<NcmResponse> listAllFallback(Throwable cause) {
+        log.warn("Siscomex fallback (listAll): {}", cause.toString());
+        throw new ResourceUnavailableException(PROVIDER_NAME,
+                "Siscomex indisponível ou Circuit Breaker aberto.", cause);
     }
 
     @SuppressWarnings("unused")

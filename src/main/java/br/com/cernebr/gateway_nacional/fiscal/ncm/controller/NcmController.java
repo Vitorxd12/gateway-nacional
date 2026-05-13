@@ -98,28 +98,29 @@ public class NcmController {
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
     @Operation(
-            summary = "Buscar NCMs por descrição (texto)",
+            summary = "Listar catálogo NCM completo ou buscar por descrição",
             description = """
-                    Pesquisa textual sobre as descrições oficiais do Mercosul. A busca é \
-                    delegada ao BrasilAPI (que indexa descrições e códigos); resultados \
-                    do Siscomex são unificados pelo gateway no DTO comum quando \
-                    disponíveis.
+                    **Sem parâmetros** — retorna o catálogo completo de NCMs (todos os ~15k itens \
+                    da Nomenclatura Comum do Mercosul). Fonte primária: dump oficial do Portal Único \
+                    Siscomex atualizado diariamente. Cache Redis de **30 dias** (hard-TTL) com \
+                    chave `ncm::catalogo-completo`.
 
-                    Útil em fluxos de emissão de NF-e onde o operador conhece o produto \
-                    (ex: "leite", "fertilizante") mas não o código exato.
+                    **Com `?descricao={texto}`** — pesquisa textual sobre as descrições oficiais. \
+                    Cascata **BrasilAPI → Siscomex**. Cache Redis de **30 dias** com chave \
+                    normalizada em lowercase.
 
-                    Resultado é cacheado em Redis por **30 dias** com chave normalizada \
-                    em lowercase — `Leite` e `leite` são a mesma entrada de cache."""
+                    Útil para emissão de NF-e, validação fiscal automatizada e carga inicial \
+                    de tabelas de referência em ERPs."""
     )
     @ApiResponses({
             @ApiResponse(
                     responseCode = "200",
-                    description = "Lista (possivelmente vazia) de NCMs cuja descrição/código corresponde ao texto",
+                    description = "Catálogo completo (sem params) ou lista filtrada (com ?descricao)",
                     content = @Content(array = @ArraySchema(schema = @Schema(implementation = NcmResponse.class)))
             ),
             @ApiResponse(
                     responseCode = "400",
-                    description = "Parâmetro `descricao` ausente ou em branco",
+                    description = "Parâmetro `descricao` presente mas em branco ou muito curto",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))
             ),
             @ApiResponse(
@@ -128,13 +129,15 @@ public class NcmController {
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))
             )
     })
-    public List<NcmResponse> searchByDescricao(
-            @Parameter(description = "Texto livre (PT-BR sem acentos é tolerado)", example = "leite", required = true)
-            @RequestParam
-            @NotBlank(message = "O parâmetro 'descricao' é obrigatório.")
+    public List<NcmResponse> listOrSearch(
+            @Parameter(description = "Texto livre para busca (omita para catálogo completo)", example = "leite")
+            @RequestParam(required = false)
             @Size(min = 2, max = 80, message = "A descrição deve ter entre 2 e 80 caracteres.")
             String descricao
     ) {
+        if (descricao == null || descricao.isBlank()) {
+            return ncmService.listAll();
+        }
         return ncmService.searchByDescricao(descricao);
     }
 }

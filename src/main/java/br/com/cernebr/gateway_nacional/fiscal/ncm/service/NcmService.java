@@ -14,6 +14,7 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -171,4 +172,38 @@ public class NcmService {
                 "provider", providerTag,
                 "outcome", outcome).increment();
     }
+
+    /**
+     * Retorna o catálogo completo de NCMs (todos os ~15k itens do Mercosul).
+     *
+     * <p>Cascata: <b>Siscomex (dump oficial) → BrasilAPI</b>.
+     * O Siscomex é o primário pois já obtém o arquivo completo com um único GET;
+     * a BrasilAPI não expondo endpoint de catálogo sem parâmetros, atua apenas
+     * como placeholder nessa cascata (retorna lista vazia via default da interface).
+     * Resultado cacheado por <b>7 dias</b> (soft-TTL) com hard-TTL de 30 dias
+     * conforme {@code CacheConfig}.</p>
+     */
+    @Cacheable(cacheNames = NCM_CACHE, key = "'catalogo-completo'")
+    public List<NcmResponse> listAll() {
+        for (NcmClientProvider provider : providersInOrder) {
+            Timer.Sample sample = Timer.start(meterRegistry);
+            try {
+                List<NcmResponse> results = provider.listAll();
+                if (!results.isEmpty()) {
+                    recordOutcome(provider.providerName(), "success", sample);
+                    log.info("NCM listAll resolvido por provider={} ({} itens)",
+                            provider.providerName(), results.size());
+                    return results;
+                }
+                recordOutcome(provider.providerName(), "not-found", sample);
+                log.debug("NCM listAll vazio em provider={}", provider.providerName());
+            } catch (ResourceUnavailableException ex) {
+                recordOutcome(provider.providerName(), "failure", sample);
+                log.warn("Provider {} falhou em NCM listAll ({}). Cascateando.",
+                        provider.providerName(), ex.getMessage());
+            }
+        }
+        return List.of();
+    }
 }
+

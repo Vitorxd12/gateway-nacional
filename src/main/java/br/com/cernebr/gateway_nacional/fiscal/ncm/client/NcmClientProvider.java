@@ -47,6 +47,21 @@ public interface NcmClientProvider {
     List<NcmResponse> searchByDescricao(String descricao);
 
     /**
+     * Returns the full NCM catalogue (all ~15k entries from the current Mercosul table).
+     *
+     * <p>Not all providers implement this efficiently — the default is to return
+     * {@link java.util.List#of()} so the service cascades to the next provider.
+     * Only {@link SiscomexNcmClient} fully implements this (downloads the official dump).</p>
+     *
+     * @return complete catalogue; empty list if this provider cannot supply it.
+     * @throws br.com.cernebr.gateway_nacional.exception.ResourceUnavailableException
+     *         when the provider is unreachable or the Circuit Breaker is OPEN.
+     */
+    default List<NcmResponse> listAll() {
+        return List.of();
+    }
+
+    /**
      * Stable provider identifier used for logging and observability tags.
      */
     String providerName();
