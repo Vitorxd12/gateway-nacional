@@ -11,6 +11,8 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.ArrayList;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Resolve a sigla de uma taxa (SELIC, IPCA, CDI…) disparando BrasilAPI, BCB SGS
@@ -51,5 +53,31 @@ public class TaxasService {
                 new NamedSupplier<>(bcbSgs.providerName(),    () -> bcbSgs.fetch(sigla)),
                 new NamedSupplier<>(hgBrasil.providerName(),  () -> hgBrasil.fetch(sigla))
         ));
+    }
+
+    /**
+     * Retorna todas as taxas principais (CDI, Selic, IPCA) de uma vez, em paralelo.
+     *
+     * <p>Cada sigla é buscada independentemente na cascata de providers e o resultado
+     * agregado em um array canônico. Cacheado em Redis sob a chave {@code 'ALL'}
+     * com TTL de 12 h — mesma janela dos lookups individuais.</p>
+     *
+     * <p>Falhas individuais são registradas em log e omitidas do array final:
+     * o chamador recebe as taxas disponíveis, nunca um 503 por falha parcial.
+     * Apenas se <em>todas</em> as 3 siglas falharem a lista virá vazia.</p>
+     */
+    @Cacheable(cacheNames = "taxas", key = "'ALL'")
+    public List<TaxaResponse> listAll() {
+        List<String> siglas = List.of("cdi", "selic", "ipca");
+        List<TaxaResponse> resultado = new ArrayList<>();
+        for (String sigla : siglas) {
+            try {
+                resultado.add(findBySigla(sigla));
+            } catch (Exception ex) {
+                log.warn("TaxasService.listAll: falha ao resolver sigla={} ({}); omitindo do bulk.",
+                        sigla, ex.getMessage());
+            }
+        }
+        return resultado;
     }
 }
