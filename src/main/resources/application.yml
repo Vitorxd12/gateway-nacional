@@ -405,6 +405,12 @@ resilience4j:
         baseConfig: default
       nominatimOsmCB:
         baseConfig: default
+      # CEP — busca por endereço e geocodificação reversa. CBs separados dos
+      # fluxos de consulta por CEP para isolar saúde de cada operação.
+      viaCepBuscaCB:
+        baseConfig: default
+      nominatimReversoCB:
+        baseConfig: default
       # CNPJ providers
       brasilApiCnpjCB:
         baseConfig: default
@@ -611,6 +617,13 @@ resilience4j:
       brasilApiV2GeoCB:
         baseConfig: default
       nominatimOsmCB:
+        baseConfig: default
+        timeoutDuration: 5s
+      # CEP — busca textual (ViaCEP) e geocodificação reversa (Nominatim).
+      # Nominatim reverso recebe o mesmo teto de 5s do forward geocoder.
+      viaCepBuscaCB:
+        baseConfig: default
+      nominatimReversoCB:
         baseConfig: default
         timeoutDuration: 5s
       # CNPJ providers
