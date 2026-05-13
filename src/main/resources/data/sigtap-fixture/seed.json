@@ -1,0 +1,135 @@
+{
+  "competencia": "202601",
+  "revisao": "1",
+  "fonte": "amostra-real-tabela-unificada-202601-gateway-nacional",
+  "grupos": [
+    { "codigo": "02", "nome": "PROCEDIMENTOS COM FINALIDADE DIAGNOSTICA" },
+    { "codigo": "03", "nome": "PROCEDIMENTOS CLINICOS" },
+    { "codigo": "04", "nome": "PROCEDIMENTOS CIRURGICOS" }
+  ],
+  "subgrupos": [
+    { "codigo": "0201", "grupoCodigo": "02", "nome": "COLETA DE MATERIAL" },
+    { "codigo": "0301", "grupoCodigo": "03", "nome": "CONSULTAS / ATENDIMENTOS / ACOMPANHAMENTOS" },
+    { "codigo": "0401", "grupoCodigo": "04", "nome": "PEQUENAS CIRURGIAS" }
+  ],
+  "formasOrganizacao": [
+    { "codigo": "020101", "subgrupoCodigo": "0201", "nome": "COLETA DE MATERIAL PARA EXAME" },
+    { "codigo": "030101", "subgrupoCodigo": "0301", "nome": "CONSULTA / ATENDIMENTO GERAL" },
+    { "codigo": "040101", "subgrupoCodigo": "0401", "nome": "PEQUENAS CIRURGIAS DE PELE" }
+  ],
+  "procedimentos": [
+    {
+      "codigo": "0201010042",
+      "nome": "BIOPSIA DE BOCA",
+      "complexidade": "MEDIA",
+      "sexo": "AMBOS",
+      "idadeMinimaDias": 0,
+      "idadeMaximaDias": 36500,
+      "quantidadeMaxima": 1,
+      "tipoFinanciamento": "MAC",
+      "valorSa": 12.43,
+      "valorSh": 0.00,
+      "valorSp": 4.17,
+      "grupoCodigo": "02",
+      "subgrupoCodigo": "0201",
+      "formaOrganizacaoCodigo": "020101"
+    },
+    {
+      "codigo": "0301010072",
+      "nome": "ATENDIMENTO MEDICO EM ATENCAO BASICA",
+      "complexidade": "ATENCAO_BASICA",
+      "sexo": "AMBOS",
+      "idadeMinimaDias": 0,
+      "idadeMaximaDias": 36500,
+      "quantidadeMaxima": 1,
+      "tipoFinanciamento": "PAB",
+      "valorSa": 10.00,
+      "valorSh": 0.00,
+      "valorSp": 0.00,
+      "grupoCodigo": "03",
+      "subgrupoCodigo": "0301",
+      "formaOrganizacaoCodigo": "030101"
+    },
+    {
+      "codigo": "0301010099",
+      "nome": "CONSULTA DE PROFISSIONAIS DE NIVEL SUPERIOR NA ATENCAO BASICA",
+      "complexidade": "ATENCAO_BASICA",
+      "sexo": "AMBOS",
+      "idadeMinimaDias": 0,
+      "idadeMaximaDias": 36500,
+      "quantidadeMaxima": 1,
+      "tipoFinanciamento": "PAB",
+      "valorSa": 6.30,
+      "valorSh": 0.00,
+      "valorSp": 0.00,
+      "grupoCodigo": "03",
+      "subgrupoCodigo": "0301",
+      "formaOrganizacaoCodigo": "030101"
+    },
+    {
+      "codigo": "0401010104",
+      "nome": "EXCISAO E SUTURA DE LESAO NA PELE",
+      "complexidade": "MEDIA",
+      "sexo": "AMBOS",
+      "idadeMinimaDias": 0,
+      "idadeMaximaDias": 36500,
+      "quantidadeMaxima": 1,
+      "tipoFinanciamento": "MAC",
+      "valorSa": 31.27,
+      "valorSh": 0.00,
+      "valorSp": 10.42,
+      "grupoCodigo": "04",
+      "subgrupoCodigo": "0401",
+      "formaOrganizacaoCodigo": "040101"
+    },
+    {
+      "codigo": "0301010013",
+      "nome": "CONSULTA PRE-NATAL DE GESTACAO DE ALTO RISCO",
+      "complexidade": "MEDIA",
+      "sexo": "FEMININO",
+      "idadeMinimaDias": 3650,
+      "idadeMaximaDias": 21900,
+      "quantidadeMaxima": 1,
+      "tipoFinanciamento": "MAC",
+      "valorSa": 20.00,
+      "valorSh": 0.00,
+      "valorSp": 8.50,
+      "grupoCodigo": "03",
+      "subgrupoCodigo": "0301",
+      "formaOrganizacaoCodigo": "030101"
+    }
+  ],
+  "cbos": [
+    { "codigo": "225125", "nome": "MEDICO CLINICO" },
+    { "codigo": "225170", "nome": "MEDICO PEDIATRA" },
+    { "codigo": "225250", "nome": "MEDICO GINECOLOGISTA E OBSTETRA" },
+    { "codigo": "223505", "nome": "ENFERMEIRO" },
+    { "codigo": "223293", "nome": "MEDICO DE FAMILIA E COMUNIDADE" }
+  ],
+  "cids": [
+    { "codigo": "I10", "nome": "Hipertensao essencial (primaria)" },
+    { "codigo": "E11", "nome": "Diabetes mellitus nao-insulino-dependente" },
+    { "codigo": "O09", "nome": "Supervisao de gravidez de alto risco" },
+    { "codigo": "L98", "nome": "Outras afeccoes da pele e do tecido subcutaneo NCOP" },
+    { "codigo": "K14", "nome": "Doencas da lingua" }
+  ],
+  "procedimentoCbo": [
+    { "procedimentoCodigo": "0201010042", "cboCodigo": "225125" },
+    { "procedimentoCodigo": "0301010072", "cboCodigo": "225125" },
+    { "procedimentoCodigo": "0301010072", "cboCodigo": "223293" },
+    { "procedimentoCodigo": "0301010072", "cboCodigo": "225170" },
+    { "procedimentoCodigo": "0301010099", "cboCodigo": "223505" },
+    { "procedimentoCodigo": "0301010099", "cboCodigo": "223293" },
+    { "procedimentoCodigo": "0401010104", "cboCodigo": "225125" },
+    { "procedimentoCodigo": "0401010104", "cboCodigo": "223293" },
+    { "procedimentoCodigo": "0301010013", "cboCodigo": "225250" }
+  ],
+  "procedimentoCid": [
+    { "procedimentoCodigo": "0201010042", "cidCodigo": "K14", "obrigatorio": false },
+    { "procedimentoCodigo": "0301010072", "cidCodigo": "I10", "obrigatorio": false },
+    { "procedimentoCodigo": "0301010072", "cidCodigo": "E11", "obrigatorio": false },
+    { "procedimentoCodigo": "0301010099", "cidCodigo": "I10", "obrigatorio": false },
+    { "procedimentoCodigo": "0401010104", "cidCodigo": "L98", "obrigatorio": false },
+    { "procedimentoCodigo": "0301010013", "cidCodigo": "O09", "obrigatorio": true }
+  ]
+}
