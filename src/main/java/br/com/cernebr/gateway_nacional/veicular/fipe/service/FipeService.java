@@ -21,6 +21,8 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Supplier;
@@ -137,6 +139,76 @@ public class FipeService {
                 p -> new FipeTabelasEnvelope(p.listTabelasReferencia()),
                 "");
         return envelope.tabelas();
+    }
+
+    /**
+     * Retorna todas as marcas/montadoras de todos os tipos de veículo
+     * (Carros + Motos + Caminhões) consolidadas em um único array
+     * ordenado numericamente pelo código.
+     *
+     * <p>Espelha o comportamento da BrasilAPI {@code /api/fipe/marcas/v1}
+     * (sem path param de tipo), que concatena os três arrays internamente
+     * e ordena por {@code parseInt(valor)}. Cache Redis 15 dias,
+     * chave {@code 'marcas-all'}.</p>
+     */
+    @Cacheable(cacheNames = "fipe", key = "'marcas-all'")
+    public List<FipeMarcaResponse> listTodasMarcas() {
+        List<FipeMarcaResponse> todas = new ArrayList<>();
+        for (FipeTipoVeiculo tipo : FipeTipoVeiculo.values()) {
+            try {
+                todas.addAll(listMarcas(tipo, null));
+            } catch (Exception ex) {
+                log.warn("FIPE listTodasMarcas: falha ao listar tipo={} ({}); continuando.",
+                        tipo, ex.getMessage());
+            }
+        }
+        todas.sort(Comparator.comparingInt(m -> safeParseInt(m.valor())));
+        log.info("FIPE listTodasMarcas: {} marcas consolidadas (todos os tipos).", todas.size());
+        return todas;
+    }
+
+    /**
+     * Histórico de preços FIPE para um código — todas as combinações
+     * ano-modelo × combustível disponíveis na tabela atual.
+     *
+     * <p>A BrasilAPI {@code GET /api/fipe/preco/v1/{codigoFipe}} já retorna
+     * <em>todos</em> os registros (todos os anos e tipos de combustível) para
+     * o código informado — não exige o parâmetro {@code anoModelo}. Esse array
+     * constitui o histórico de variações de preço por ano.
+     *
+     * <p>Cascata: BrasilAPI → FipeOrgScraper (apenas o último ano). Cache
+     * 15 dias, chave {@code 'historico-{codigoFipe}'}.</p>
+     */
+    @Cacheable(cacheNames = "fipe", key = "'historico-' + #codigoFipe")
+    public List<FipePrecoResponse> listHistorico(String codigoFipe) {
+        // BrasilAPI é o primário aqui porque retorna TODOS os anos de uma vez;
+        // o scraper FIPE-Oficial só sabe responder ano-a-ano (loop seria pesado).
+        for (FipeNavegacaoProvider provider : navProvidersInOrder) {
+            if (provider instanceof BrasilApiFipeClient brasilApi) {
+                Timer.Sample sample = Timer.start(meterRegistry);
+                try {
+                    List<FipePrecoResponse> historico = brasilApi.fetchTodosPrecos(codigoFipe);
+                    if (!historico.isEmpty()) {
+                        recordOutcome(provider.providerName(), "success", sample);
+                        log.info("FIPE histórico {} resolvido por BrasilAPI ({} registros).",
+                                codigoFipe, historico.size());
+                        return historico;
+                    }
+                    recordOutcome(provider.providerName(), "not-found", sample);
+                } catch (Exception ex) {
+                    recordOutcome(provider.providerName(), "failure", sample);
+                    log.warn("BrasilAPI falhou em histórico FIPE {} ({}). Sem fallback completo.",
+                            codigoFipe, ex.getMessage());
+                }
+                break; // só BrasilAPI suporta dump histórico completo
+            }
+        }
+        throw new ResourceUnavailableException(AGGREGATE_PROVIDER,
+                "Histórico FIPE indisponível: nenhum provider retornou dados para " + codigoFipe + ".");
+    }
+
+    private static int safeParseInt(String s) {
+        try { return Integer.parseInt(s); } catch (NumberFormatException e) { return Integer.MAX_VALUE; }
     }
 
     /**

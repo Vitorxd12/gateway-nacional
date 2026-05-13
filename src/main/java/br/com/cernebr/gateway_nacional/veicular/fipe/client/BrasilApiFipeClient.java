@@ -72,6 +72,27 @@ public class BrasilApiFipeClient implements FipeClientProvider, FipeNavegacaoPro
                         "Ano modelo " + anoModelo + " não disponível no catálogo BrasilAPI para este código."));
     }
 
+    /**
+     * Retorna TODOS os registros de preço para um código FIPE (todos os anos e
+     * tipos de combustível) sem filtragem por {@code anoModelo}.
+     *
+     * <p>Usado pelo endpoint de histórico:
+     * {@code GET /api/v1/fipe/preco/historico/{fipeCode}}.</p>
+     */
+    @CircuitBreaker(name = "brasilApiFipeCB", fallbackMethod = "fallbackTodosPrecos")
+    public List<FipePrecoResponse> fetchTodosPrecos(String codigoFipe) {
+        List<BrasilApiFipePayload> payload = restClient.get()
+                .uri("/api/fipe/preco/v1/{codigoFipe}", codigoFipe)
+                .retrieve()
+                .body(PAYLOAD_LIST_TYPE);
+
+        if (payload == null || payload.isEmpty()) {
+            throw new ResourceUnavailableException(PROVIDER_NAME,
+                    "BrasilAPI retornou lista vazia para o código FIPE (histórico).");
+        }
+        return payload.stream().map(BrasilApiFipePayload::toFipePrecoResponse).toList();
+    }
+
     @Override
     public String providerName() {
         return PROVIDER_NAME;
@@ -83,6 +104,13 @@ public class BrasilApiFipeClient implements FipeClientProvider, FipeNavegacaoPro
                 codigoFipe, anoModelo, cause.toString());
         throw new ResourceUnavailableException(PROVIDER_NAME,
                 "BrasilAPI indisponível ou Circuit Breaker aberto.", cause);
+    }
+
+    @SuppressWarnings("unused")
+    private List<FipePrecoResponse> fallbackTodosPrecos(String codigoFipe, Throwable cause) {
+        log.warn("BrasilAPI (FIPE) fallback histórico for codigoFipe={} cause={}", codigoFipe, cause.toString());
+        throw new ResourceUnavailableException(PROVIDER_NAME,
+                "BrasilAPI indisponível ou Circuit Breaker aberto (histórico).", cause);
     }
 
     private static int parseAnoModelo(String anoModelo) {

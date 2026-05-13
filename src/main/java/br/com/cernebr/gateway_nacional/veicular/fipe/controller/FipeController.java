@@ -168,6 +168,69 @@ public class FipeController {
         return fipeService.listTabelasReferencia();
     }
 
+    @GetMapping(value = "/marcas", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "Listar todas as marcas FIPE (Carros + Motos + Caminhões)",
+            description = """
+                    Retorna o catálogo consolidado de marcas/montadoras de **todos os tipos \
+                    de veículo** (carros, motos e caminhões) em um único array ordenado \
+                    numericamente pelo código da marca.
+
+                    Equivalente ao comportamento do endpoint `/api/fipe/marcas/v1` da BrasilAPI \
+                    (sem path-param de tipo), que internamente concatena os três arrays e ordena \
+                    por `parseInt(valor)`.
+
+                    Útil para construir lookups de marcas sem precisar de 3 chamadas separadas. \
+                    Cache Redis de **15 dias** com chave única `fipe::marcas-all`."""
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200",
+                    description = "Array consolidado de todas as marcas (todos os tipos de veículo)",
+                    content = @Content(array = @ArraySchema(schema = @Schema(implementation = FipeMarcaResponse.class)))),
+            @ApiResponse(responseCode = "503",
+                    description = "Todos os providers de FIPE estão indisponíveis",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))
+    })
+    public List<FipeMarcaResponse> listTodasMarcas() {
+        return fipeService.listTodasMarcas();
+    }
+
+    @GetMapping(value = "/preco/historico/{codigoFipe}", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "Histórico de preços FIPE por código",
+            description = """
+                    Retorna **todos** os registros de preço disponíveis para um código FIPE — \
+                    todas as combinações de ano-modelo × tipo de combustível presentes na tabela \
+                    de referência atual.
+
+                    Enquanto `GET /preco/{codigoFipe}/{anoModelo}` filtra por um ano específico, \
+                    esta rota entrega o catálogo completo do código, permitindo comparação histórica \
+                    de valorização/desvalorização do veículo.
+
+                    Fonte primária: **BrasilAPI** (o único provider que devolve todos os anos de \
+                    uma só chamada). Cache Redis de **15 dias** com chave `fipe::historico-{codigoFipe}`."""
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200",
+                    description = "Histórico de preços (todos os anos/combustíveis disponíveis)",
+                    content = @Content(array = @ArraySchema(schema = @Schema(implementation = FipePrecoResponse.class)))),
+            @ApiResponse(responseCode = "400",
+                    description = "Código FIPE em formato inválido",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "503",
+                    description = "Todos os providers de FIPE estão indisponíveis",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))
+    })
+    public List<FipePrecoResponse> listHistorico(
+            @Parameter(description = "Código FIPE no padrão 000000-0", example = "005340-0", required = true)
+            @PathVariable
+            @Pattern(regexp = CODIGO_FIPE_REGEX,
+                    message = "O código FIPE deve seguir o padrão 000000-0 (6 dígitos, hífen, 1 dígito).")
+            String codigoFipe
+    ) {
+        return fipeService.listHistorico(codigoFipe);
+    }
+
     private static FipeTipoVeiculo resolveTipo(String raw) {
         return FipeTipoVeiculo.fromWireValue(raw)
                 .orElseThrow(() -> new ResourceNotFoundException("FipeTipoVeiculo",
