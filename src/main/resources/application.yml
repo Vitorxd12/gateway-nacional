@@ -24,6 +24,14 @@ spring:
           max-idle: 8
           min-idle: 2
 
+  # Sem datasource global autoconfigurado.
+  # O SIGTAP gerencia o próprio SQLite embarcado em runtime (somente quando
+  # GATEWAY_SIGTAP_CRON_ENABLED=true). Sem Flyway, sem Hibernate, sem JPA —
+  # boot continua zero-cost para self-hosts que não usam o módulo.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+
 server:
   port: 8080
   # Encerramento gracioso: drena requests em voo antes de finalizar (importante em rolling deploys).
@@ -212,7 +220,7 @@ gateway:
     # do mesmo XML com cobertura Cloudflare). O upstream pública cinco
     # rotas: cidade, capital, aeroporto/{icao}, previsão e ondas.
     inpe:
-      base-url: http://servicos.cptec.inpe.br/XML
+      base-url: https://servicos.cptec.inpe.br/XML
     brasilapi:
       base-url: https://brasilapi.com.br
   registrobr:
@@ -299,6 +307,45 @@ gateway:
       # como ponto de extensão futura.
       base-url: https://sisab.saude.gov.br
       report-path: /paginas/acessoRestrito/relatorio/federal/envio/RelValidacao.xhtml
+    sigtap:
+      # SIGTAP — Tabela Unificada de Procedimentos do SUS (DataSUS).
+      # ETL roda em pipeline isolado das threads HTTP. O agendamento na
+      # madrugada é OPT-IN — administrador do self-host deve setar
+      # GATEWAY_SIGTAP_CRON_ENABLED=true para autorizar consumo de banda
+      # e gravação em disco. O zip mensal tem ~25MB; o processo ~2 min.
+      cron:
+        enabled: ${GATEWAY_SIGTAP_CRON_ENABLED:false}
+        # Madrugada para minimizar concorrência com tráfego operacional.
+        # Cron 6-campos (Spring): seg min hor dia-mês mês dia-semana
+        expression: ${GATEWAY_SIGTAP_CRON:0 0 3 * * *}
+      download:
+        # URL canônica do DataSUS para o pacote mensal. O placeholder
+        # {competencia} é substituído em runtime por AAAAMM (ex: 202605).
+        # Caso o gov mude o domínio, sobrescrever via env sem redeploy.
+        base-url: ${GATEWAY_SIGTAP_DOWNLOAD_URL:http://sigtap.datasus.gov.br/tabela-unificada/app/sec/inicio.jsp}
+        pacote-url-template: ${GATEWAY_SIGTAP_PACOTE_URL:ftp://ftp2.datasus.gov.br/public/sistemas/tup/downloads/TabelaUnificada_{competencia}_v{revisao}.zip}
+        timeout-ms: 60000
+      retry:
+        # Exponential backoff entre tentativas dentro da mesma execução do job.
+        # Ordem do DataSUS: instabilidade típica é noturna e dura ~15 min;
+        # 5 tentativas com base 60s atinge cobertura de até ~30 min.
+        max-attempts: 5
+        initial-delay-ms: 60000
+        multiplier: 2.0
+      etl:
+        # Diretório onde o pacote zip e os arquivos extraídos ficam
+        # temporariamente durante o processamento. Limpo ao final.
+        work-dir: ${GATEWAY_SIGTAP_WORK_DIR:${user.home}/.gateway-nacional/sigtap-work}
+        # Quando true, o startup tenta carregar um fixture mínimo embarcado
+        # em classpath:data/sigtap-fixture/ caso nenhuma competência esteja
+        # ativa — útil para demos, testes e ambiente self-host antes do
+        # primeiro download real do DataSUS.
+        seed-on-empty: ${GATEWAY_SIGTAP_SEED_ON_EMPTY:true}
+      database:
+        # Arquivo SQLite embarcado. Só é tocado quando o cron está
+        # habilitado — ETL cria o arquivo, o schema e popula sob demanda.
+        # Para produção corporativa, apontar para volume persistente.
+        path: ${GATEWAY_SIGTAP_DB_PATH:data/sigtap.db}
   licitacoes:
     # Módulo GovTech — integração unificada dos 4 portais cobertos pelo
     # gateway. Cascata sequencial (não hedge) para proteger a quota dos

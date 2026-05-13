@@ -125,6 +125,26 @@ public class CacheConfig {
     // publicação; 12h hard sobra. Soft-TTL 2h via RAC absorve correções
     // pontuais (republicação de edital com errata).
     private static final Duration LICITACOES_DETALHE_TTL = Duration.ofHours(12);
+    // Simples Nacional — estado de enquadramento muda em janelas mensais
+    // (adesão/exclusão). 24h hard absorve consultas batch de ERPs (folha,
+    // emissor de NF-e). Soft-TTL 12h via RAC dispara refresh sem martelar
+    // o portal Consulta Optantes — que tem CAPTCHA em horário comercial.
+    private static final Duration SIMPLES_TTL = Duration.ofHours(24);
+    // Sintegra/IE — situação cadastral estadual muda raras vezes para
+    // empresas ativas; 7d hard é o equilíbrio entre não martelar o SVRS
+    // (que oscila em estabilidade) e refletir suspensões/baixas em janela
+    // razoável para integrações fiscais.
+    private static final Duration SINTEGRA_TTL = Duration.ofDays(7);
+    // CND — certidões caducam em 180 dias (Federal/PGFN, FGTS) ou 6 meses
+    // (TST). Mas o conteúdo do PDF é frozen no instante de emissão; só
+    // mudaria se o cliente reemitisse. 6h hard absorve bursts de
+    // habilitação em licitações sem servir um PDF com data desatualizada.
+    private static final Duration CND_TTL = Duration.ofHours(6);
+    // SIGTAP — tabela DataSUS é virada uma vez ao mês (competência). A
+    // resposta processada no banco é imutável durante o ciclo; cabe um
+    // TTL agressivo na borda Redis (30 dias) — o ETL noturno invalida via
+    // CacheManager.evictAll quando promove uma nova competência.
+    private static final Duration SIGTAP_TTL = Duration.ofDays(30);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
@@ -156,6 +176,10 @@ public class CacheConfig {
     private static final String TUSS_CACHE = "tuss";
     private static final String LICITACOES_ATIVAS_CACHE = "licitacoesAtivas";
     private static final String LICITACOES_DETALHE_CACHE = "licitacoesDetalhe";
+    private static final String SIMPLES_CACHE = "simples";
+    private static final String SINTEGRA_CACHE = "sintegra";
+    private static final String CND_CACHE = "cnd";
+    public static final String SIGTAP_CACHE = "sigtap";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -191,7 +215,11 @@ public class CacheConfig {
                 Map.entry(REGISTRO_BR_CACHE, baseConfig().entryTtl(REGISTRO_BR_TTL)),
                 Map.entry(TUSS_CACHE, baseConfig().entryTtl(TUSS_TTL)),
                 Map.entry(LICITACOES_ATIVAS_CACHE, baseConfig().entryTtl(LICITACOES_ATIVAS_TTL)),
-                Map.entry(LICITACOES_DETALHE_CACHE, baseConfig().entryTtl(LICITACOES_DETALHE_TTL))
+                Map.entry(LICITACOES_DETALHE_CACHE, baseConfig().entryTtl(LICITACOES_DETALHE_TTL)),
+                Map.entry(SIMPLES_CACHE, baseConfig().entryTtl(SIMPLES_TTL)),
+                Map.entry(SINTEGRA_CACHE, baseConfig().entryTtl(SINTEGRA_TTL)),
+                Map.entry(CND_CACHE, baseConfig().entryTtl(CND_TTL)),
+                Map.entry(SIGTAP_CACHE, baseConfig().entryTtl(SIGTAP_TTL))
         );
 
         return RedisCacheManager.builder(connectionFactory)
