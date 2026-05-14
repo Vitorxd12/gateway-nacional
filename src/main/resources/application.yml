@@ -398,6 +398,31 @@ gateway:
       region-query-template: "?estado={uf}&cidade={cidade}"
       timeout-millis: 5000
       user-agent: Mozilla/5.0 (compatible; GatewayNacional/1.0)
+    # Avaliação Técnica KBB — extração via FlareSolverr + parse JSON do blob
+    # `vehiclePrices` embutido no SSR do Next.js do portal.
+    #
+    # O KBB indexa veículos por id interno (`KbbId`), não por código FIPE.
+    # O `search-path` padrão usa placeholders {ano} {categoria} {marca}
+    # {modelo} {versao} {kbbId} {canal}; o operador é responsável por
+    # alimentar uma camada de discovery (sitemap, busca, mapeamento próprio)
+    # que traduza FIPE em slug/kbbId. Para validação local rápida, sobrescreva
+    # o template inteiro via env apontando direto para uma URL conhecida.
+    kbb:
+      base-url: ${GATEWAY_AVALIACAO_KBB_BASE_URL:https://kbb.com.br}
+      search-path: ${GATEWAY_AVALIACAO_KBB_SEARCH_PATH:/se/{ano}/{categoria}/{marca}/{modelo}/{versao}/{kbbId}/preco-de-{canal}/}
+      # Categoria default quando o discovery layer não resolveu (carro|picape|hatch|sedan|suv).
+      categoria-default: ${GATEWAY_AVALIACAO_KBB_CATEGORIA_DEFAULT:carro}
+      # Quilometragem-base presumida quando o portal não publica explicitamente.
+      # 15.000 km/ano é a convenção KBB para veículos urbanos.
+      km-por-ano: ${GATEWAY_AVALIACAO_KBB_KM_POR_ANO:15000}
+      # Multiplicadores por estado de conservação. O KBB aplica o ajuste
+      # client-side sobre `suggestedPrice` e não expõe os fatores absolutos
+      # no JSON SSR. Os valores abaixo são a convenção pública KBB e podem
+      # ser tunados via env quando a empresa adotar política diferente.
+      conservacao:
+        excelente: ${GATEWAY_AVALIACAO_KBB_CONSERVACAO_EXCELENTE:1.00}
+        bom: ${GATEWAY_AVALIACAO_KBB_CONSERVACAO_BOM:0.95}
+        regular: ${GATEWAY_AVALIACAO_KBB_CONSERVACAO_REGULAR:0.87}
   historico:
     # Histórico veicular — orquestração híbrida premium-first:
     #   1. Se GATEWAY_OLHONOCARRO_KEY / GATEWAY_CHECKAUTO_KEY estiverem
@@ -591,6 +616,12 @@ resilience4j:
       olxScraperCB:
         baseConfig: default
       mobiAutoScraperCB:
+        baseConfig: default
+      # KBB — Avaliação Técnica. CB isolado dos scrapers de marketplace porque
+      # KBB compartilha o sidecar FlareSolverr com FIPE oficial; uma onda de
+      # bloqueio Cloudflare degrada KBB antes da FIPE, então manter o CB
+      # próprio evita poluir a saúde percebida do fipeOrgScraperCB.
+      kbbScraperCB:
         baseConfig: default
       # Histórico veicular premium (APIs oficiais) — CBs isolados dos
       # scrapers gratuitos: indisponibilidade da API premium não envenena
@@ -836,6 +867,11 @@ resilience4j:
         baseConfig: default
       mobiAutoScraperCB:
         baseConfig: default
+      # KBB via FlareSolverr — Chromium cold + carregamento do portal pode
+      # passar de 5s; 30s alinha com fipeOrgScraperCB (mesma infraestrutura).
+      kbbScraperCB:
+        baseConfig: default
+        timeoutDuration: 30s
       # Histórico veicular premium — APIs REST oficiais, JSON estruturado,
       # sem Cloudflare: 5s sobra para o round-trip autenticado. CB isolado
       # dos scrapers para failure mode independente.
