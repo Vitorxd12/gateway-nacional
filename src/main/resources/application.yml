@@ -383,6 +383,10 @@ gateway:
     olx:
       base-url: https://www.olx.com.br
       search-path: /autos-e-pecas/carros-vans-e-utilitarios/{marca}/{modelo}/ano-{ano}
+      # Roteamento geográfico: a OLX segmenta por estado no subdomínio. Quando
+      # a requisição traz ?uf=SP, o host vira sp.olx.com.br; a cidade entra
+      # como termo de busca ?q=. Sem uf, mantém-se www.olx.com.br (nacional).
+      region-host-template: https://{uf}.olx.com.br
       timeout-millis: 5000
       user-agent: Mozilla/5.0 (compatible; GatewayNacional/1.0)
     mobiauto:
