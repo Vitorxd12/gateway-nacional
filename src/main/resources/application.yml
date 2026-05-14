@@ -64,6 +64,42 @@ gateway:
     url: ${GATEWAY_SISAB_SIDECAR_URL:}
   # Base URLs por provedor — sobrescritas em test profile (WireMock) e
   # eventualmente em deploys que precisem apontar para mirrors internos.
+  cnpj:
+    # Engine canônica de CNPJ — agrega Consulta Básica + QSA + Empresa via
+    # malha multi-fallback de 5 providers gratuitos. Capital social entregue
+    # por providers governamentais/Serpro vem como inteiro em centavos e é
+    # estritamente dividido por 100 pelo parser canônico.
+    cnpjws:
+      # Tier primário (alta velocidade) — publica.cnpj.ws/cnpj/{cnpj}.
+      # Payload riquíssimo (estabelecimento, atividades, sócios, Simples).
+      base-url: https://publica.cnpj.ws
+    opencnpj:
+      # Tier primário (alta velocidade) — snapshot estático CDN-fronted.
+      # Capital social em centavos (formato Serpro). Sem rate-limit.
+      base-url: https://api.opencnpj.org
+    cnpja:
+      # Tier secundário (dados complementares) — tabela qualificada de sócios
+      # e enquadramento Simples/MEI consolidado por período. Free tier público.
+      base-url: https://open.cnpja.com
+    receitaws:
+      # Tier fallback controlado — rate-limit local de 3 req/min protege o
+      # tier público (HTTP 429 agressivo). Quando o bucket esgota, o client
+      # curto-circuita pré-flight para preservar quota da próxima janela.
+      base-url: https://www.receitaws.com.br
+      requests-per-minute: 3
+    archive:
+      # Tier defensivo — dump RFB horário (zips/JSONs). É a apólice de seguro
+      # quando todas as APIs REST online estão fora simultaneamente.
+      base-url: https://archive.cnpj.pw
+      path: /cnpj/{cnpj}.json
+    # NOTA: BrasilAPI e MinhaReceita ficam mantidos no caminho legado
+    # (/api/v1/cnpj/{cnpj}) — vide gateway.cnpj.brasilapi e .minhareceita
+    # no controller antigo. O endpoint consolidado novo
+    # (/api/v1/cadastral/cnpj/{cnpj}) opera em malha independente.
+    brasilapi:
+      base-url: https://brasilapi.com.br
+    minhareceita:
+      base-url: https://minhareceita.org
   cep:
     # Tier 1 — endereço base (hedge entre 3 providers). Sem geo.
     viacep:
@@ -398,6 +434,47 @@ gateway:
       region-query-template: "?estado={uf}&cidade={cidade}"
       timeout-millis: 5000
       user-agent: Mozilla/5.0 (compatible; GatewayNacional/1.0)
+    # Webmotors — SPA Next.js protegida por Cloudflare + bot detection F5.
+    # Depende OBRIGATORIAMENTE do FlareSolverr para resolver o desafio.
+    # Os preços vivem no blob JSON __NEXT_DATA__ (campos Price/SearchPrice/
+    # UniqueSellingPoint); fallback para varredura DOM quando o contrato
+    # do blob mudar.
+    webmotors:
+      base-url: ${GATEWAY_AVALIACAO_WEBMOTORS_BASE_URL:https://www.webmotors.com.br}
+      search-path: ${GATEWAY_AVALIACAO_WEBMOTORS_SEARCH_PATH:/carros/estoque/{marca}/{modelo}?anoDe={ano}&anoAte={ano}}
+      # Roteamento geográfico: Webmotors usa query string `estadoCidade=SP+CAMPINAS`.
+      region-query-template: ${GATEWAY_AVALIACAO_WEBMOTORS_REGION_QUERY:&estadoCidade={uf}+{cidade}}
+      # Faixas defensivas — descartam ruído (anúncios de R$ 9,90) e overflow numérico.
+      min-price: ${GATEWAY_AVALIACAO_WEBMOTORS_MIN_PRICE:3000}
+      max-price: ${GATEWAY_AVALIACAO_WEBMOTORS_MAX_PRICE:1500000}
+    # Mercado Livre Veículos — URL amigável SEO (carros.mercadolivre.com.br/
+    # {marca}/{modelo}/ano-{ano}/). Estratégia híbrida: Jsoup direto com
+    # User-Agent rotativo primeiro; escalona para FlareSolverr quando detecta
+    # challenge (cf-chl, captcha, body curto demais).
+    mercadolivre:
+      base-url: ${GATEWAY_AVALIACAO_MELI_BASE_URL:https://carros.mercadolivre.com.br}
+      search-path: ${GATEWAY_AVALIACAO_MELI_SEARCH_PATH:/{marca}/{modelo}/ano-{ano}/}
+      # Roteamento geográfico — Mercado Livre usa segmento de path com PriceRange/ESTADO.
+      region-path-template: ${GATEWAY_AVALIACAO_MELI_REGION_PATH:_PriceRange_0-9999999*ESTADO_{uf}}
+      timeout-millis: 7000
+      min-price: ${GATEWAY_AVALIACAO_MELI_MIN_PRICE:3000}
+      max-price: ${GATEWAY_AVALIACAO_MELI_MAX_PRICE:1500000}
+    # ------------------------------------------------------------------
+    # Hard timeout aplicado por scraper no fan-out do AvaliacaoService.
+    # Quando um marketplace excede esse limite (Webmotors travando atrás
+    # de Cloudflare, MercadoLivre lento sob carga), o orquestrador ignora
+    # o resultado e agrega os scrapers sobreviventes — HTTP 200 com média
+    # limpa dos que responderam.
+    scraper-hard-timeout-millis: ${GATEWAY_AVALIACAO_SCRAPER_HARD_TIMEOUT_MILLIS:12000}
+    # Motor estatístico Anti-Outlier — tuning dos coeficientes de banda.
+    # mad-multiplier=3.0 cobre 99.7% sob normalidade (regra empírica 3σ);
+    # iqr-multiplier=1.5 é o filtro de Tukey clássico; min-sample-size=4
+    # é o piso para acionar filtragem estatística — abaixo disso a média
+    # bruta é entregue com aviso (algoritmo=NENHUM).
+    estatistica:
+      mad-multiplier: ${GATEWAY_AVALIACAO_ESTATISTICA_MAD:3.0}
+      iqr-multiplier: ${GATEWAY_AVALIACAO_ESTATISTICA_IQR:1.5}
+      min-sample-size: ${GATEWAY_AVALIACAO_ESTATISTICA_MIN_SAMPLE:4}
     # Avaliação Técnica KBB — extração via FlareSolverr + parse JSON do blob
     # `vehiclePrices` embutido no SSR do Next.js do portal.
     #
@@ -530,12 +607,24 @@ resilience4j:
         baseConfig: default
       nominatimReversoCB:
         baseConfig: default
-      # CNPJ providers
+      # CNPJ providers (legado /api/v1/cnpj/{cnpj})
       brasilApiCnpjCB:
         baseConfig: default
       receitaWsCB:
         baseConfig: default
       minhaReceitaCB:
+        baseConfig: default
+      # CNPJ consolidado — 5 providers da engine /api/v1/cadastral/cnpj/{cnpj}.
+      # CBs isolados para que falha de um upstream gratuito não polua a
+      # percepção dos demais. ReceitaWS reaproveita o CB do caminho legado
+      # (mesma upstream — estado deve ser único).
+      cnpjWsCB:
+        baseConfig: default
+      openCnpjCB:
+        baseConfig: default
+      cnpjACB:
+        baseConfig: default
+      archiveCnpjPwCB:
         baseConfig: default
       # Calendário providers
       brasilApiFeriadosCB:
@@ -616,6 +705,15 @@ resilience4j:
       olxScraperCB:
         baseConfig: default
       mobiAutoScraperCB:
+        baseConfig: default
+      # Webmotors via FlareSolverr — Cloudflare + bot detection F5. CB isolado
+      # do KBB porque ambos compartilham sidecar mas têm payloads independentes;
+      # bloqueio em Webmotors não deve poluir percepção de saúde do KBB.
+      webmotorsScraperCB:
+        baseConfig: default
+      # Mercado Livre — estratégia híbrida Jsoup+FlareSolverr; CB próprio
+      # para isolar variações do filtro de bot do MELI (rotações de _d2id).
+      mercadoLivreScraperCB:
         baseConfig: default
       # KBB — Avaliação Técnica. CB isolado dos scrapers de marketplace porque
       # KBB compartilha o sidecar FlareSolverr com FIPE oficial; uma onda de
@@ -773,13 +871,28 @@ resilience4j:
       nominatimReversoCB:
         baseConfig: default
         timeoutDuration: 5s
-      # CNPJ providers
+      # CNPJ providers (legado)
       brasilApiCnpjCB:
         baseConfig: default
       receitaWsCB:
         baseConfig: default
       minhaReceitaCB:
         baseConfig: default
+      # CNPJ consolidado — timeout estendido a 10s, alinhado ao hard-timeout
+      # por provider no CnpjConsolidadoService. Permite ao Archive CNPJ.PW
+      # baixar fragmentos JSON do dump RFB sem tripar o CB prematuramente.
+      cnpjWsCB:
+        baseConfig: default
+        timeoutDuration: 10s
+      openCnpjCB:
+        baseConfig: default
+        timeoutDuration: 10s
+      cnpjACB:
+        baseConfig: default
+        timeoutDuration: 10s
+      archiveCnpjPwCB:
+        baseConfig: default
+        timeoutDuration: 10s
       # Calendário providers
       brasilApiFeriadosCB:
         baseConfig: default
@@ -867,6 +980,16 @@ resilience4j:
         baseConfig: default
       mobiAutoScraperCB:
         baseConfig: default
+      # Webmotors — FlareSolverr+Cloudflare; teto alinhado ao hard timeout
+      # do orquestrador (12s) com folga para resolução do challenge.
+      webmotorsScraperCB:
+        baseConfig: default
+        timeoutDuration: 15s
+      # Mercado Livre — Jsoup direto cobre o caminho feliz; escalonamento
+      # para FlareSolverr quando challenge detectado eleva ao mesmo teto.
+      mercadoLivreScraperCB:
+        baseConfig: default
+        timeoutDuration: 15s
       # KBB via FlareSolverr — Chromium cold + carregamento do portal pode
       # passar de 5s; 30s alinha com fipeOrgScraperCB (mesma infraestrutura).
       kbbScraperCB:

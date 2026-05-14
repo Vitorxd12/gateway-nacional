@@ -7,6 +7,7 @@ import org.springframework.data.redis.serializer.SerializationException;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
@@ -28,6 +29,13 @@ import java.util.Map;
 @Slf4j
 @Configuration
 @EnableCaching
+// Profile "no-redis" desliga toda a infra Redis para validação local sem
+// sidecar (curl direto contra a rota de avaliação). Em produção/dev padrão,
+// o profile não é ativado e o RedisCacheManager funciona normalmente.
+// O fallback {@link NoRedisCacheConfig} entrega um {@code SimpleCacheManager}
+// em memória para que o RefreshAheadCache e os @Cacheable existentes
+// continuem operacionais sem quebra de injeção.
+@Profile("!no-redis")
 public class CacheConfig {
 
     private static final Duration DEFAULT_TTL = Duration.ofHours(24);
@@ -167,6 +175,13 @@ public class CacheConfig {
     // refresh-ahead em background, mantendo a latência percebida em
     // sub-milissegundos enquanto o Chromium recarrega o portal.
     private static final Duration KBB_AVALIACAO_TTL = Duration.ofDays(10);
+    // CNPJ consolidado — dados cadastrais de PJ têm volatilidade baixíssima
+    // (mudança de razão social/situação cadastral acontece em janelas mensais
+    // ou maiores). 30 dias hard absorve quase 100% das consultas repetidas
+    // por integradores; soft-TTL de 24h (definido no service) garante que
+    // qualquer alteração propague em ≤ 1 dia útil via refresh-ahead em
+    // background, sem martelar os 5 providers no caminho crítico.
+    private static final Duration CNPJ_CONSOLIDADO_TTL = Duration.ofDays(30);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
@@ -205,6 +220,7 @@ public class CacheConfig {
     private static final String HISTORICO_VEICULAR_CACHE = "historicoVeicular";
     private static final String TCO_ENTRADA_VEICULAR_CACHE = "tcoEntradaVeicular";
     private static final String KBB_AVALIACAO_CACHE = "kbbAvaliacao";
+    private static final String CNPJ_CONSOLIDADO_CACHE = "cnpjsConsolidados";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -247,7 +263,8 @@ public class CacheConfig {
                 Map.entry(SIGTAP_CACHE, baseConfig().entryTtl(SIGTAP_TTL)),
                 Map.entry(HISTORICO_VEICULAR_CACHE, baseConfig().entryTtl(HISTORICO_VEICULAR_TTL)),
                 Map.entry(TCO_ENTRADA_VEICULAR_CACHE, baseConfig().entryTtl(TCO_ENTRADA_VEICULAR_TTL)),
-                Map.entry(KBB_AVALIACAO_CACHE, baseConfig().entryTtl(KBB_AVALIACAO_TTL))
+                Map.entry(KBB_AVALIACAO_CACHE, baseConfig().entryTtl(KBB_AVALIACAO_TTL)),
+                Map.entry(CNPJ_CONSOLIDADO_CACHE, baseConfig().entryTtl(CNPJ_CONSOLIDADO_TTL))
         );
 
         return RedisCacheManager.builder(connectionFactory)
