@@ -426,6 +426,16 @@ gateway:
       base-url: ${GATEWAY_HISTORICO_CONSULTARPLACA_URL:https://consultar-placa.com}
       placa-path: ${GATEWAY_HISTORICO_CONSULTARPLACA_PATH:/placa/{placa}}
       timeout-millis: 8000
+  veicular:
+    risco:
+      # Motor de depreciação automática (cross-domain). O redutor é aplicado
+      # sobre o preço médio de mercado quando o histórico aponta risco:
+      #   - risco MEDIO (leilão OU sinistro) → redutor-medio;
+      #   - risco ALTO  (leilão E sinistro)  → redutor-alto.
+      # Ambos os valores são clampeados à faixa mandatória [0.20, 0.30] no
+      # boot do AvaliacaoRiscoService — config só ajusta dentro do contrato.
+      redutor-medio: ${GATEWAY_VEICULAR_RISCO_REDUTOR_MEDIO:0.20}
+      redutor-alto: ${GATEWAY_VEICULAR_RISCO_REDUTOR_ALTO:0.30}
 
 # Actuator: expõe apenas o necessário para observabilidade externa.
 # Prometheus faz scrape em /actuator/prometheus; health é consumido por liveness/readiness probes.
