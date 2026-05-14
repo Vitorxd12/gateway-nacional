@@ -145,6 +145,7 @@ public class AvaliacaoRiscoService {
                 avaliacao.referenciaFipe(),
                 avaliacao.mercado(),
                 avaliacao.scoreAvaliacao(),
+                avaliacao.avaliacaoKbb(),
                 risco,
                 alertaRiscoGrave,
                 apontamentos,

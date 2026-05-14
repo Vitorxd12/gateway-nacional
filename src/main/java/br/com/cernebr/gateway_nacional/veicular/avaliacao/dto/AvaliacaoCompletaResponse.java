@@ -64,6 +64,10 @@ public record AvaliacaoCompletaResponse(
                 example = "Em linha com a FIPE")
         String scoreAvaliacao,
 
+        @Schema(description = "Avaliação Técnica KBB — bandas Lojista vs. Particular, multiplicador por conservação. "
+                + "Sempre presente: quando indisponível, vem com `disponivel=false` e mensagem explicativa.")
+        PrecoKbbDTO avaliacaoKbb,
+
         @Schema(description = "Banda de risco consolidada do histórico veicular (BAIXO / MEDIO / ALTO).")
         RiscoConsolidado riscoConsolidado,
 
