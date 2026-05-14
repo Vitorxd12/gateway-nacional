@@ -4,6 +4,7 @@ import br.com.cernebr.gateway_nacional.veicular.avaliacao.client.MercadoClientPr
 import br.com.cernebr.gateway_nacional.veicular.avaliacao.dto.AvaliacaoResponse;
 import br.com.cernebr.gateway_nacional.veicular.avaliacao.dto.DadosMercado;
 import br.com.cernebr.gateway_nacional.veicular.avaliacao.dto.DetalhesAmostragem;
+import br.com.cernebr.gateway_nacional.veicular.avaliacao.dto.PrecoKbbDTO;
 import br.com.cernebr.gateway_nacional.veicular.fipe.dto.FipePrecoResponse;
 import br.com.cernebr.gateway_nacional.veicular.fipe.service.FipeService;
 import br.com.cernebr.gateway_nacional.veicular.placa.dto.PlacaResponse;
@@ -80,15 +81,18 @@ public class AvaliacaoService {
     private final PlacaService placaService;
     private final FipeService fipeService;
     private final List<MercadoClientProvider> scrapers;
+    private final KbbAvaliacaoService kbbAvaliacaoService;
     private final MeterRegistry meterRegistry;
 
     public AvaliacaoService(PlacaService placaService,
                             FipeService fipeService,
                             List<MercadoClientProvider> scrapers,
+                            KbbAvaliacaoService kbbAvaliacaoService,
                             MeterRegistry meterRegistry) {
         this.placaService = placaService;
         this.fipeService = fipeService;
         this.scrapers = List.copyOf(scrapers);
+        this.kbbAvaliacaoService = kbbAvaliacaoService;
         this.meterRegistry = meterRegistry;
     }
 
@@ -171,16 +175,40 @@ public class AvaliacaoService {
                                                String cidade) {
         FipePrecoResponse referenciaFipe;
         DadosMercado mercado;
+        PrecoKbbDTO avaliacaoKbb;
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
             CompletableFuture<FipePrecoResponse> fipeFuture =
                     CompletableFuture.supplyAsync(() -> fetchFipeIfPossible(codigoFipe, ano), executor);
             CompletableFuture<DadosMercado> mercadoFuture =
                     CompletableFuture.supplyAsync(() -> scrapeMercadoOn(marca, modelo, ano, uf, cidade, executor), executor);
+            // KBB roda em paralelo com FIPE e fan-out de mercado. O service KBB já encapsula
+            // o RefreshAheadCache (kbbAvaliacao, hard 10d / soft 7d) e degrada graciosamente —
+            // o join nunca lança para falha recuperável de upstream.
+            CompletableFuture<PrecoKbbDTO> kbbFuture =
+                    CompletableFuture.supplyAsync(() -> fetchKbbIfPossible(codigoFipe, marca, modelo, ano), executor);
             referenciaFipe = fipeFuture.join();
             mercado = mercadoFuture.join();
+            avaliacaoKbb = kbbFuture.join();
         }
         String score = computeScore(referenciaFipe, mercado);
-        return new AvaliacaoResponse(placa, dadosVeiculo, referenciaFipe, mercado, score);
+        return new AvaliacaoResponse(placa, dadosVeiculo, referenciaFipe, mercado, score, avaliacaoKbb);
+    }
+
+    /**
+     * Aciona a Avaliação Técnica KBB quando há {@code codigoFipe} para
+     * resolver o veículo. Sem código, devolve um snapshot indisponível
+     * direto — o KBB indexa por código FIPE, não por marca/modelo livre.
+     * Falhas inesperadas viram indisponibilidade graciosa para que o
+     * {@code join()} no fan-out nunca lance.
+     */
+    private PrecoKbbDTO fetchKbbIfPossible(String codigoFipe, String marca, String modelo, int anoModelo) {
+        try {
+            return kbbAvaliacaoService.fetchAvaliacao(codigoFipe, marca, modelo, anoModelo);
+        } catch (Exception ex) {
+            log.warn("KBB falhou inesperadamente para codigoFipe={} ano={}: {}", codigoFipe, anoModelo, ex.toString());
+            return PrecoKbbDTO.indisponivel(codigoFipe, null,
+                    "Avaliação KBB indisponível: " + ex.getClass().getSimpleName());
+        }
     }
 
     private FipePrecoResponse fetchFipeIfPossible(String codigoFipe, int anoModelo) {
