@@ -160,6 +160,13 @@ public class CacheConfig {
     // 15 dias. 30 dias hard absorve o ciclo anual com folga; soft-TTL 15d via
     // RAC dispara refresh oportunista entre publicações sem recalcular no hot path.
     private static final Duration TCO_ENTRADA_VEICULAR_TTL = Duration.ofDays(30);
+    // KBB Avaliação Técnica — extração de bandas Lojista/Particular via
+    // FlareSolverr + Jsoup. O KBB reprocessa sua tabela em ciclos semanais,
+    // então 10d hard absorve o ciclo com folga sem servir snapshots
+    // arqueológicos. Soft-TTL 7d (definido em KbbAvaliacaoService) dispara
+    // refresh-ahead em background, mantendo a latência percebida em
+    // sub-milissegundos enquanto o Chromium recarrega o portal.
+    private static final Duration KBB_AVALIACAO_TTL = Duration.ofDays(10);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
@@ -197,6 +204,7 @@ public class CacheConfig {
     public static final String SIGTAP_CACHE = "sigtap";
     private static final String HISTORICO_VEICULAR_CACHE = "historicoVeicular";
     private static final String TCO_ENTRADA_VEICULAR_CACHE = "tcoEntradaVeicular";
+    private static final String KBB_AVALIACAO_CACHE = "kbbAvaliacao";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -238,7 +246,8 @@ public class CacheConfig {
                 Map.entry(CND_CACHE, baseConfig().entryTtl(CND_TTL)),
                 Map.entry(SIGTAP_CACHE, baseConfig().entryTtl(SIGTAP_TTL)),
                 Map.entry(HISTORICO_VEICULAR_CACHE, baseConfig().entryTtl(HISTORICO_VEICULAR_TTL)),
-                Map.entry(TCO_ENTRADA_VEICULAR_CACHE, baseConfig().entryTtl(TCO_ENTRADA_VEICULAR_TTL))
+                Map.entry(TCO_ENTRADA_VEICULAR_CACHE, baseConfig().entryTtl(TCO_ENTRADA_VEICULAR_TTL)),
+                Map.entry(KBB_AVALIACAO_CACHE, baseConfig().entryTtl(KBB_AVALIACAO_TTL))
         );
 
         return RedisCacheManager.builder(connectionFactory)
