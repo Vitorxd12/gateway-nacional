@@ -390,6 +390,20 @@ gateway:
       search-path: /comprar/{marca}/{modelo}/{ano}
       timeout-millis: 5000
       user-agent: Mozilla/5.0 (compatible; GatewayNacional/1.0)
+  historico:
+    # Histórico veicular gratuito — duas fontes públicas com FlareSolverr
+    # fallback + baseline PlacaFipe (registro veicular). Todas configuráveis
+    # via env para deploys que precisem redirecionar para mirrors ou
+    # endpoints atualizados sem rebuild.
+    leilaofree:
+      base-url: ${GATEWAY_HISTORICO_LEILAOFREE_URL:https://leilaofree.com.br}
+      timeout-millis: 8000
+    consultarplaca:
+      # Alternativa configurável quando o endpoint canônico cai: aponte para
+      # https://portalods.com.br via env GATEWAY_HISTORICO_CONSULTARPLACA_URL.
+      base-url: ${GATEWAY_HISTORICO_CONSULTARPLACA_URL:https://consultar-placa.com}
+      placa-path: ${GATEWAY_HISTORICO_CONSULTARPLACA_PATH:/placa/{placa}}
+      timeout-millis: 8000
 
 # Actuator: expõe apenas o necessário para observabilidade externa.
 # Prometheus faz scrape em /actuator/prometheus; health é consumido por liveness/readiness probes.
@@ -545,6 +559,19 @@ resilience4j:
       olxScraperCB:
         baseConfig: default
       mobiAutoScraperCB:
+        baseConfig: default
+      # Histórico veicular (free-tier scrapers) — CBs isolados para que
+      # falha do LeilaoFree (Cloudflare/523) não contamine a percepção
+      # do ConsultarPlaca, e vice-versa. A baseline PlacaFipe reaproveita
+      # placaFipeScraperCB (definido acima).
+      leilaoFreeScraperCB:
+        baseConfig: default
+      consultarPlacaScraperCB:
+        baseConfig: default
+      # PlacaFipe baseline para o módulo histórico — isolado do CB do
+      # PlacaFipeScraperClient (usado no módulo Placa) porque os perfis
+      # de carga e UA divergem; failure mode independente.
+      placaFipeBaselineCB:
         baseConfig: default
       # Saúde (portais gov.br) providers
       fnsScraperCB:
@@ -768,6 +795,18 @@ resilience4j:
         baseConfig: default
       mobiAutoScraperCB:
         baseConfig: default
+      # Histórico veicular — timeoutDuration 10s para dar margem ao
+      # FlareSolverr resolver o desafio Cloudflare antes do hard-timeout
+      # de 12s aplicado no HistoricoService.
+      leilaoFreeScraperCB:
+        baseConfig: default
+        timeoutDuration: 10s
+      consultarPlacaScraperCB:
+        baseConfig: default
+        timeoutDuration: 10s
+      placaFipeBaselineCB:
+        baseConfig: default
+        timeoutDuration: 8s
       # Saúde (portais gov.br) providers — timeout estendido (15s) porque
       # consultafns e relatorioaps-prd são lentos sob carga e o ciclo do
       # FNS exige duas chamadas sequenciais. CB já contempla failure-rate.
