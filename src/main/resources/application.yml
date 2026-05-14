@@ -399,10 +399,19 @@ gateway:
       timeout-millis: 5000
       user-agent: Mozilla/5.0 (compatible; GatewayNacional/1.0)
   historico:
-    # Histórico veicular gratuito — duas fontes públicas com FlareSolverr
-    # fallback + baseline PlacaFipe (registro veicular). Todas configuráveis
-    # via env para deploys que precisem redirecionar para mirrors ou
-    # endpoints atualizados sem rebuild.
+    # Histórico veicular — orquestração híbrida premium-first:
+    #   1. Se GATEWAY_OLHONOCARRO_KEY / GATEWAY_CHECKAUTO_KEY estiverem
+    #      configuradas, o gateway consome as APIs premium oficiais em
+    #      milissegundos (JSON estruturado, sem Cloudflare).
+    #   2. Sem chave, os clients premium curto-circuitam antes da chamada
+    #      HTTP e a malha de scrapers gratuitos (LeilaoFree + ConsultarPlaca
+    #      + PlacaFipe baseline + FlareSolverr) assume como fallback de
+    #      resiliência. Zero config = ainda funciona, só mais lento.
+    olhonocarro:
+      # Provider premium oficial — autenticação Bearer. A chave é injetada
+      # via env GATEWAY_OLHONOCARRO_KEY (vazia por padrão → provider pulado).
+      base-url: ${GATEWAY_HISTORICO_OLHONOCARRO_URL:https://api.olhonocarro.com.br}
+      api-key: ${GATEWAY_OLHONOCARRO_KEY:}
     leilaofree:
       base-url: ${GATEWAY_HISTORICO_LEILAOFREE_URL:https://leilaofree.com.br}
       timeout-millis: 8000
@@ -567,6 +576,13 @@ resilience4j:
       olxScraperCB:
         baseConfig: default
       mobiAutoScraperCB:
+        baseConfig: default
+      # Histórico veicular premium (APIs oficiais) — CBs isolados dos
+      # scrapers gratuitos: indisponibilidade da API premium não envenena
+      # a percepção da malha free-tier e vice-versa. Quando a chave não
+      # está configurada o client curto-circuita pré-flight, o que tripa
+      # o CB rapidamente e acelera o fallback para os scrapers.
+      olhoNoCarroCB:
         baseConfig: default
       # Histórico veicular (free-tier scrapers) — CBs isolados para que
       # falha do LeilaoFree (Cloudflare/523) não contamine a percepção
@@ -803,6 +819,12 @@ resilience4j:
         baseConfig: default
       mobiAutoScraperCB:
         baseConfig: default
+      # Histórico veicular premium — APIs REST oficiais, JSON estruturado,
+      # sem Cloudflare: 5s sobra para o round-trip autenticado. CB isolado
+      # dos scrapers para failure mode independente.
+      olhoNoCarroCB:
+        baseConfig: default
+        timeoutDuration: 5s
       # Histórico veicular — timeoutDuration 10s para dar margem ao
       # FlareSolverr resolver o desafio Cloudflare antes do hard-timeout
       # de 12s aplicado no HistoricoService.
