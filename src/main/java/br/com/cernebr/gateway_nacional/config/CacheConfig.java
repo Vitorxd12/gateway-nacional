@@ -145,6 +145,12 @@ public class CacheConfig {
     // TTL agressivo na borda Redis (30 dias) — o ETL noturno invalida via
     // CacheManager.evictAll quando promove uma nova competência.
     private static final Duration SIGTAP_TTL = Duration.ofDays(30);
+    // Histórico veicular gratuito (LeilaoFree + ConsultarPlaca + PlacaFipe).
+    // As fontes públicas mudam pouco (registro de leilão é evento esporádico
+    // por placa). Hard-TTL 24h absorve bursts de dashboards anti-fraude;
+    // soft-TTL 6h (definido no service) dispara refresh em background sem
+    // estressar os Cloudflare-fronted endpoints com hits repetidos.
+    private static final Duration HISTORICO_VEICULAR_TTL = Duration.ofHours(24);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
@@ -180,6 +186,7 @@ public class CacheConfig {
     private static final String SINTEGRA_CACHE = "sintegra";
     private static final String CND_CACHE = "cnd";
     public static final String SIGTAP_CACHE = "sigtap";
+    private static final String HISTORICO_VEICULAR_CACHE = "historicoVeicular";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -219,7 +226,8 @@ public class CacheConfig {
                 Map.entry(SIMPLES_CACHE, baseConfig().entryTtl(SIMPLES_TTL)),
                 Map.entry(SINTEGRA_CACHE, baseConfig().entryTtl(SINTEGRA_TTL)),
                 Map.entry(CND_CACHE, baseConfig().entryTtl(CND_TTL)),
-                Map.entry(SIGTAP_CACHE, baseConfig().entryTtl(SIGTAP_TTL))
+                Map.entry(SIGTAP_CACHE, baseConfig().entryTtl(SIGTAP_TTL)),
+                Map.entry(HISTORICO_VEICULAR_CACHE, baseConfig().entryTtl(HISTORICO_VEICULAR_TTL))
         );
 
         return RedisCacheManager.builder(connectionFactory)
