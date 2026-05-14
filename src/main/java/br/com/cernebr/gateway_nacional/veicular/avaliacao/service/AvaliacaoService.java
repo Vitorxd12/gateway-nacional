@@ -4,7 +4,10 @@ import br.com.cernebr.gateway_nacional.veicular.avaliacao.client.MercadoClientPr
 import br.com.cernebr.gateway_nacional.veicular.avaliacao.dto.AvaliacaoResponse;
 import br.com.cernebr.gateway_nacional.veicular.avaliacao.dto.DadosMercado;
 import br.com.cernebr.gateway_nacional.veicular.avaliacao.dto.DetalhesAmostragem;
+import br.com.cernebr.gateway_nacional.veicular.avaliacao.dto.EstatisticaAntiOutlier;
+import br.com.cernebr.gateway_nacional.veicular.avaliacao.dto.FonteConsultada;
 import br.com.cernebr.gateway_nacional.veicular.avaliacao.dto.PrecoKbbDTO;
+import br.com.cernebr.gateway_nacional.veicular.avaliacao.service.EstatisticaVeicularService.AmostraFiltrada;
 import br.com.cernebr.gateway_nacional.veicular.fipe.dto.FipePrecoResponse;
 import br.com.cernebr.gateway_nacional.veicular.fipe.service.FipeService;
 import br.com.cernebr.gateway_nacional.veicular.placa.dto.PlacaResponse;
@@ -12,30 +15,51 @@ import br.com.cernebr.gateway_nacional.veicular.placa.service.PlacaService;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Orchestrates the cross-domain valuation: Placa identification + FIPE
- * reference + real-market scraping. The FIPE call and the marketplace
- * fan-out run concurrently on a single virtual-thread executor, so total
- * wall-time tracks the slowest single provider rather than the sum.
+ * reference + real-market scraping (OLX, MobiAuto, Webmotors, MercadoLivre).
+ * The FIPE call and the marketplace fan-out run concurrently on a single
+ * virtual-thread executor, so total wall-time tracks the slowest single
+ * provider rather than the sum.
+ *
+ * <h2>Hard timeout & fail-soft</h2>
+ * <p>Cada scraper roda em sua própria virtual thread e está sujeito a um
+ * hard timeout configurável ({@code gateway.avaliacao.scraper-hard-timeout-millis},
+ * default 12s). Se um marketplace travar, o orquestrador apenas <i>ignora</i>
+ * o resultado dele e agrega o que sobreviveu — a regra é entregar HTTP 200
+ * com a média limpa dos scrapers que responderam. Cada falha (TIMEOUT, FALHA,
+ * VAZIO) é registrada em {@link FonteConsultada} para auditoria.</p>
+ *
+ * <h2>Motor estatístico Anti-Outlier</h2>
+ * <p>Após o fan-out, a amostra agregada é passada ao
+ * {@link EstatisticaVeicularService}. O serviço aplica filtro robusto
+ * (MAD com fallback IQR / heurística ±30%) e devolve a amostra
+ * <i>filtrada</i> + a memória de cálculo. O {@code precoMedioAjustado}
+ * resultante é o número de referência comercial; o {@code precoMedio}
+ * bruto fica exposto para auditoria.</p>
  *
  * <p><b>ATENÇÃO: Não migrar para
  * {@link br.com.cernebr.gateway_nacional.config.HedgedExecutor} nem
  * {@link br.com.cernebr.gateway_nacional.config.RefreshAheadCache}.</b>
- * Orquestrador de múltiplos scrapers Selenium/FlareSolverr (OLX, MobiAuto,
- * etc.) e dos services pesados {@link PlacaService}/{@link FipeService}.
+ * Orquestrador de múltiplos scrapers Selenium/FlareSolverr.
  * O fan-out interno em virtual threads já paraleliza scrapers independentes;
  * adicionar HedgedExecutor disparia replicação dos scrapers, e RAC duplicaria
  * o trabalho em background. A composição atual é a forma estável de proteger
@@ -46,18 +70,7 @@ import java.util.concurrent.Executors;
  * {@code codigoFipe} associated with that placa. This service detects the
  * field, plugs it straight into the FIPE lookup, and the response shows up
  * with the comparative reference in place — the caller never needed to
- * supply the code by hand. Token-free deploy, zero-friction Avaliação.</p>
- *
- * <p>Failure semantics are layered:
- * <ul>
- *   <li>Placa is mandatory — its failure aborts the whole call (the cascade
- *       inside {@link PlacaService} already handles upstream degradation);</li>
- *   <li>FIPE is best-effort — when no code is supplied <i>and</i> the placa
- *       provider did not publish one, the comparison block is skipped and
- *       the score reflects that;</li>
- *   <li>Each scraper is independent — one failure does not poison the others
- *       thanks to {@link CompletableFuture#exceptionally(java.util.function.Function)}.</li>
- * </ul>
+ * supply the code by hand.</p>
  */
 @Slf4j
 @Service
@@ -82,37 +95,26 @@ public class AvaliacaoService {
     private final FipeService fipeService;
     private final List<MercadoClientProvider> scrapers;
     private final KbbAvaliacaoService kbbAvaliacaoService;
+    private final EstatisticaVeicularService estatisticaVeicularService;
     private final MeterRegistry meterRegistry;
+    private final long scraperHardTimeoutMillis;
 
     public AvaliacaoService(PlacaService placaService,
                             FipeService fipeService,
                             List<MercadoClientProvider> scrapers,
                             KbbAvaliacaoService kbbAvaliacaoService,
-                            MeterRegistry meterRegistry) {
+                            EstatisticaVeicularService estatisticaVeicularService,
+                            MeterRegistry meterRegistry,
+                            @Value("${gateway.avaliacao.scraper-hard-timeout-millis:12000}") long scraperHardTimeoutMillis) {
         this.placaService = placaService;
         this.fipeService = fipeService;
         this.scrapers = List.copyOf(scrapers);
         this.kbbAvaliacaoService = kbbAvaliacaoService;
+        this.estatisticaVeicularService = estatisticaVeicularService;
         this.meterRegistry = meterRegistry;
+        this.scraperHardTimeoutMillis = scraperHardTimeoutMillis;
     }
 
-    /**
-     * Full pipeline — identifies the vehicle by placa, then composes FIPE
-     * reference and market snapshot. Fails fast (HTTP 503) when the placa
-     * cascade exhausts all providers.
-     *
-     * <p><b>FIPE auto-discovery:</b> the placa cascade may itself surface
-     * a {@code codigoFipe} (today only the {@code PlacaFipeScraperClient}
-     * publishes it; WDApi/Keplaca do not). When that happens, the gateway
-     * stitches the bridge automatically — FIPE is queried with the
-     * discovered code and the caller does not need to provide one.</p>
-     *
-     * <p><b>Precedence:</b> a caller-supplied {@code codigoFipe} always
-     * wins (they may know a specific year-variant code better than the
-     * scraper). The placa-discovered code only fills the gap when the
-     * caller stayed silent. Result: token-free deploys still get full
-     * Avaliação response, while sophisticated callers retain control.</p>
-     */
     public AvaliacaoResponse avaliarPorPlaca(String placa, String codigoFipe, String uf, String cidade) {
         PlacaResponse dadosVeiculo = placaService.findByPlaca(placa);
         int ano = dadosVeiculo.anoModelo() > 0 ? dadosVeiculo.anoModelo() : dadosVeiculo.anoFabricacao();
@@ -129,42 +131,17 @@ public class AvaliacaoService {
         );
     }
 
-    /**
-     * Decides which {@code codigoFipe} to send to the FIPE service. Caller-
-     * supplied code wins when present; otherwise the placa-discovered code
-     * fills in. {@code null} when neither source provides one — the score
-     * resolver downstream surfaces that to the user.
-     */
     private static String pickEffectiveCodigoFipe(String fromCaller, String fromPlaca) {
         if (fromCaller != null && !fromCaller.isBlank()) return fromCaller;
         if (fromPlaca != null && !fromPlaca.isBlank()) return fromPlaca;
         return null;
     }
 
-    /**
-     * Token-free pipeline — bypasses {@link PlacaService} entirely. Useful
-     * when placa providers (WDApi/Keplaca) are blocked, out of credits, or
-     * the caller already knows the vehicle. {@code placa} and
-     * {@code dadosVeiculo} on the response arrive {@code null} by design.
-     */
     public AvaliacaoResponse avaliarPorVeiculo(String marca, String modelo, int ano,
                                                String codigoFipe, String uf, String cidade) {
         return composeAvaliacao(null, null, marca, modelo, ano, codigoFipe, uf, cidade);
     }
 
-    /**
-     * Shared composition path used by both entry points. Runs the FIPE
-     * lookup and the marketplace scraping <b>concurrently</b> on a single
-     * virtual-thread executor — wall-time tracks {@code max(fipe, slowest scraper)},
-     * not the sum. Both legs are individually exception-safe (FIPE returns
-     * {@code null} on failure, scrapers degrade to empty list), so
-     * {@code .join()} on either future cannot throw.
-     *
-     * <p><b>Recorte geográfico:</b> {@code uf}/{@code cidade} são repassados
-     * intactos para o fan-out de scrapers; cada marketplace decide como
-     * traduzi-los na sua URL alvo. {@code uf} ausente significa busca
-     * nacional — degradação graciosa, sem erro.</p>
-     */
     private AvaliacaoResponse composeAvaliacao(String placa,
                                                PlacaResponse dadosVeiculo,
                                                String marca,
@@ -181,9 +158,6 @@ public class AvaliacaoService {
                     CompletableFuture.supplyAsync(() -> fetchFipeIfPossible(codigoFipe, ano), executor);
             CompletableFuture<DadosMercado> mercadoFuture =
                     CompletableFuture.supplyAsync(() -> scrapeMercadoOn(marca, modelo, ano, uf, cidade, executor), executor);
-            // KBB roda em paralelo com FIPE e fan-out de mercado. O service KBB já encapsula
-            // o RefreshAheadCache (kbbAvaliacao, hard 10d / soft 7d) e degrada graciosamente —
-            // o join nunca lança para falha recuperável de upstream.
             CompletableFuture<PrecoKbbDTO> kbbFuture =
                     CompletableFuture.supplyAsync(() -> fetchKbbIfPossible(codigoFipe, marca, modelo, ano), executor);
             referenciaFipe = fipeFuture.join();
@@ -194,13 +168,6 @@ public class AvaliacaoService {
         return new AvaliacaoResponse(placa, dadosVeiculo, referenciaFipe, mercado, score, avaliacaoKbb);
     }
 
-    /**
-     * Aciona a Avaliação Técnica KBB quando há {@code codigoFipe} para
-     * resolver o veículo. Sem código, devolve um snapshot indisponível
-     * direto — o KBB indexa por código FIPE, não por marca/modelo livre.
-     * Falhas inesperadas viram indisponibilidade graciosa para que o
-     * {@code join()} no fan-out nunca lance.
-     */
     private PrecoKbbDTO fetchKbbIfPossible(String codigoFipe, String marca, String modelo, int anoModelo) {
         try {
             return kbbAvaliacaoService.fetchAvaliacao(codigoFipe, marca, modelo, anoModelo);
@@ -225,102 +192,156 @@ public class AvaliacaoService {
     }
 
     /**
-     * Fans out to every scraper in parallel on the executor passed in by
-     * {@link #composeAvaliacao} — no nested executor allocation, so the
-     * outer FIPE/Mercado split and the inner scraper fan-out share the
-     * same virtual-thread pool. Failures inside {@link #safeFetch} are
-     * absorbed (empty list returned), so a single broken marketplace
-     * cannot collapse the join.
+     * Fans out to every scraper in parallel — cada chamada com hard timeout
+     * via {@link CompletableFuture#orTimeout(long, TimeUnit)}. Resultados
+     * são compilados em {@link ScraperOutcome}: status + lista de preços +
+     * URL de referência. O orquestrador agrega as listas sobreviventes,
+     * passa pelo motor Anti-Outlier e devolve o {@link DadosMercado} final.
      */
     private DadosMercado scrapeMercadoOn(String marca, String modelo, int ano,
                                          String uf, String cidade, ExecutorService executor) {
-        List<String> linksReferencia = scrapers.stream()
-                .map(s -> s.buildSearchUrl(marca, modelo, ano, uf, cidade))
-                .toList();
+        List<CompletableFuture<ScraperOutcome>> futures = new ArrayList<>(scrapers.size());
+        for (MercadoClientProvider scraper : scrapers) {
+            CompletableFuture<ScraperOutcome> future = CompletableFuture
+                    .supplyAsync(() -> safeFetch(scraper, marca, modelo, ano, uf, cidade), executor)
+                    .orTimeout(scraperHardTimeoutMillis, TimeUnit.MILLISECONDS)
+                    .exceptionally(ex -> {
+                        Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                        String status = cause instanceof TimeoutException
+                                ? FonteConsultada.STATUS_TIMEOUT
+                                : FonteConsultada.STATUS_FALHA;
+                        log.warn("Scraper {} excedeu hard-timeout/falhou: {}",
+                                scraper.providerName(), cause.toString());
+                        return ScraperOutcome.failed(scraper, marca, modelo, ano, uf, cidade, status);
+                    });
+            futures.add(future);
+        }
 
-        List<CompletableFuture<List<BigDecimal>>> futures = scrapers.stream()
-                .map(scraper -> CompletableFuture.supplyAsync(
-                        () -> safeFetch(scraper, marca, modelo, ano, uf, cidade), executor))
-                .toList();
-
-        List<List<BigDecimal>> porScraper = futures.stream()
+        List<ScraperOutcome> outcomes = futures.stream()
                 .map(CompletableFuture::join)
                 .toList();
 
-        long scrapersComRetorno = porScraper.stream().filter(l -> !l.isEmpty()).count();
-
-        List<BigDecimal> precos = porScraper.stream()
-                .flatMap(List::stream)
-                .filter(Objects::nonNull)
-                .toList();
-
-        return aggregate(precos, linksReferencia, uf, cidade, scrapers.size(), (int) scrapersComRetorno);
+        return aggregate(outcomes, uf, cidade);
     }
 
-    private List<BigDecimal> safeFetch(MercadoClientProvider scraper,
-                                       String marca, String modelo, int ano,
-                                       String uf, String cidade) {
+    private ScraperOutcome safeFetch(MercadoClientProvider scraper,
+                                     String marca, String modelo, int ano,
+                                     String uf, String cidade) {
         Timer.Sample sample = Timer.start(meterRegistry);
+        String url = scraper.buildSearchUrl(marca, modelo, ano, uf, cidade);
         try {
             List<BigDecimal> precos = scraper.fetchPrecos(marca, modelo, ano, uf, cidade);
+            if (precos == null || precos.isEmpty()) {
+                recordOutcome(scraper.providerName(), "vazio", sample);
+                return new ScraperOutcome(scraper.providerName(),
+                        FonteConsultada.STATUS_VAZIO, List.of(), url);
+            }
             recordOutcome(scraper.providerName(), "success", sample);
-            return precos != null ? precos : List.of();
+            return new ScraperOutcome(scraper.providerName(),
+                    FonteConsultada.STATUS_OK, precos, url);
         } catch (Exception ex) {
             recordOutcome(scraper.providerName(), "failure", sample);
             log.warn("Scraper {} failed for {}-{}-{} [uf={} cidade={}]: {}",
                     scraper.providerName(), marca, modelo, ano, uf, cidade, ex.getMessage());
-            return List.of();
+            return new ScraperOutcome(scraper.providerName(),
+                    FonteConsultada.STATUS_FALHA, List.of(), url);
         }
     }
 
     /**
-     * Folds the flat price list into a {@link DadosMercado}. When a UF was
-     * supplied, every scraped price already came from a region-scoped URL —
-     * so {@code precoMedioRegional} mirrors {@code precoMedio} and the
-     * {@link DetalhesAmostragem} escopo is {@code REGIONAL}. Without a UF the
-     * regional fields stay {@code null} and the escopo is {@code NACIONAL}.
+     * Folds the per-scraper outcomes into a {@link DadosMercado}. Aggregates
+     * the surviving samples, runs them through the Anti-Outlier engine, and
+     * derives both raw and adjusted averages alongside the per-source volumetry.
      */
-    private DadosMercado aggregate(List<BigDecimal> precos, List<String> linksReferencia,
-                                   String uf, String cidade,
-                                   int scrapersConsultados, int scrapersComRetorno) {
+    private DadosMercado aggregate(List<ScraperOutcome> outcomes, String uf, String cidade) {
         boolean regional = uf != null && !uf.isBlank();
         String ufOut = regional ? uf : null;
         String cidadeOut = (regional && cidade != null && !cidade.isBlank()) ? cidade : null;
 
-        if (precos.isEmpty()) {
+        List<BigDecimal> precosAgregados = new ArrayList<>();
+        for (ScraperOutcome o : outcomes) {
+            precosAgregados.addAll(o.precos());
+        }
+        int totalBruto = precosAgregados.size();
+
+        AmostraFiltrada filtrada = estatisticaVeicularService.filtrar(precosAgregados);
+        Set<BigDecimal> sobreviventes = new HashSet<>(filtrada.amostraFiltrada());
+        EstatisticaAntiOutlier estatistica = filtrada.estatistica();
+
+        // Volumetria por fonte — também conta quantos outliers cada player contribuiu.
+        List<FonteConsultada> fontes = new ArrayList<>(outcomes.size());
+        for (ScraperOutcome o : outcomes) {
+            int descartados = (int) o.precos().stream().filter(p -> !sobreviventes.contains(p)).count();
+            fontes.add(new FonteConsultada(
+                    o.fonte(), o.status(), o.precos().size(), descartados, o.linkReferencia()));
+        }
+
+        int scrapersConsultados = outcomes.size();
+        int scrapersComRetorno = (int) outcomes.stream()
+                .filter(o -> FonteConsultada.STATUS_OK.equals(o.status()))
+                .count();
+
+        List<String> linksReferencia = outcomes.stream().map(ScraperOutcome::linkReferencia).toList();
+
+        if (filtrada.amostraFiltrada().isEmpty()) {
             DetalhesAmostragem vazia = new DetalhesAmostragem(
                     DetalhesAmostragem.escopo(ufOut, cidadeOut), 0, scrapersConsultados, scrapersComRetorno);
-            return new DadosMercado(null, null, null, 0, ufOut, cidadeOut, null, vazia, linksReferencia);
+            return new DadosMercado(null, null, null, null,
+                    totalBruto, estatistica.amostrasDescartadas(),
+                    ufOut, cidadeOut, null,
+                    vazia, estatistica, fontes, linksReferencia);
         }
-        List<BigDecimal> sorted = new ArrayList<>(precos);
-        Collections.sort(sorted);
 
-        BigDecimal menor = sorted.get(0);
-        BigDecimal maior = sorted.get(sorted.size() - 1);
+        // Estatísticas finais sobre a amostra filtrada.
+        List<BigDecimal> sortedFiltrada = new ArrayList<>(filtrada.amostraFiltrada());
+        Collections.sort(sortedFiltrada);
+        BigDecimal menor = sortedFiltrada.get(0);
+        BigDecimal maior = sortedFiltrada.get(sortedFiltrada.size() - 1);
 
-        BigDecimal soma = sorted.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal media = soma.divide(BigDecimal.valueOf(sorted.size()), 2, RoundingMode.HALF_UP);
+        // Média bruta (com todos os anúncios, antes do expurgo) — fica exposta para auditoria.
+        BigDecimal mediaBruta = mediaDe(precosAgregados);
+        BigDecimal mediaAjustada = mediaDe(filtrada.amostraFiltrada());
 
-        BigDecimal mediaRegional = regional ? media : null;
+        BigDecimal mediaRegional = regional ? mediaAjustada : null;
         DetalhesAmostragem detalhes = new DetalhesAmostragem(
-                DetalhesAmostragem.escopo(ufOut, cidadeOut), sorted.size(),
+                DetalhesAmostragem.escopo(ufOut, cidadeOut),
+                filtrada.amostraFiltrada().size(),
                 scrapersConsultados, scrapersComRetorno);
 
-        return new DadosMercado(media, menor, maior, sorted.size(),
-                ufOut, cidadeOut, mediaRegional, detalhes, linksReferencia);
+        return new DadosMercado(mediaBruta, mediaAjustada, menor, maior,
+                totalBruto, estatistica.amostrasDescartadas(),
+                ufOut, cidadeOut, mediaRegional,
+                detalhes, estatistica, fontes, linksReferencia);
     }
 
+    private static BigDecimal mediaDe(List<BigDecimal> precos) {
+        if (precos == null || precos.isEmpty()) return null;
+        BigDecimal soma = precos.stream()
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return soma.divide(BigDecimal.valueOf(precos.size()), 2, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Comparison uses {@code precoMedioAjustado} (the Anti-Outlier output);
+     * fallback to {@code precoMedio} (raw) when adjusted is null — happens
+     * only when there were no samples at all.
+     */
     private String computeScore(FipePrecoResponse fipe, DadosMercado mercado) {
+        BigDecimal mercadoBase = mercado.precoMedioAjustado() != null
+                ? mercado.precoMedioAjustado()
+                : mercado.precoMedio();
+
         boolean hasFipe = fipe != null && fipe.preco() != null
                 && fipe.preco().compareTo(BigDecimal.ZERO) > 0;
-        boolean hasMercado = mercado.precoMedio() != null
-                && mercado.precoMedio().compareTo(BigDecimal.ZERO) > 0;
+        boolean hasMercado = mercadoBase != null
+                && mercadoBase.compareTo(BigDecimal.ZERO) > 0;
 
         if (!hasFipe && !hasMercado) return SCORE_UNAVAILABLE;
         if (!hasFipe) return SCORE_NO_FIPE;
         if (!hasMercado) return SCORE_NO_MARKET;
 
-        BigDecimal ratio = mercado.precoMedio().divide(fipe.preco(), 4, RoundingMode.HALF_UP);
+        BigDecimal ratio = mercadoBase.divide(fipe.preco(), 4, RoundingMode.HALF_UP);
         if (ratio.compareTo(UPPER_BOUND) > 0) return SCORE_ABOVE;
         if (ratio.compareTo(LOWER_BOUND) < 0) return SCORE_BELOW;
         return SCORE_IN_LINE;
@@ -336,5 +357,29 @@ public class AvaliacaoService {
                 "domain", DOMAIN,
                 "provider", providerTag,
                 "outcome", outcome).increment();
+    }
+
+    /**
+     * Resultado granular de uma chamada a um scraper. Preserva o
+     * {@code linkReferencia} (URL exata raspada) e o status macro para
+     * compor {@link FonteConsultada} sem reconsultar nada.
+     */
+    private record ScraperOutcome(
+            String fonte,
+            String status,
+            List<BigDecimal> precos,
+            String linkReferencia) {
+
+        static ScraperOutcome failed(MercadoClientProvider scraper,
+                                     String marca, String modelo, int ano,
+                                     String uf, String cidade, String status) {
+            String url;
+            try {
+                url = scraper.buildSearchUrl(marca, modelo, ano, uf, cidade);
+            } catch (Exception ex) {
+                url = "";
+            }
+            return new ScraperOutcome(scraper.providerName(), status, List.of(), url);
+        }
     }
 }

@@ -164,6 +164,10 @@ public class AvaliacaoRiscoService {
      */
     private BigDecimal resolvePrecoBase(AvaliacaoResponse avaliacao) {
         DadosMercado mercado = avaliacao.mercado();
+        if (mercado != null && mercado.precoMedioAjustado() != null
+                && mercado.precoMedioAjustado().compareTo(BigDecimal.ZERO) > 0) {
+            return mercado.precoMedioAjustado();
+        }
         if (mercado != null && mercado.precoMedio() != null
                 && mercado.precoMedio().compareTo(BigDecimal.ZERO) > 0) {
             return mercado.precoMedio();
