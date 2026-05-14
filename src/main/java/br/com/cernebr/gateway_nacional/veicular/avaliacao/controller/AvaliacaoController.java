@@ -35,11 +35,28 @@ public class AvaliacaoController {
 
     private static final String PLACA_REGEX = "^[A-Za-z]{3}[0-9][A-Za-z0-9][0-9]{2}$";
     private static final String CODIGO_FIPE_REGEX = "^[0-9]{6}-[0-9]{1}$";
+    private static final String UF_REGEX = "^[A-Za-z]{2}$";
 
     private final AvaliacaoService avaliacaoService;
 
     public AvaliacaoController(AvaliacaoService avaliacaoService) {
         this.avaliacaoService = avaliacaoService;
+    }
+
+    /** Uppercased UF, or {@code null} when blank — keeps the national fallback explicit. */
+    private static String normalizeUf(String uf) {
+        if (uf == null || uf.isBlank()) {
+            return null;
+        }
+        return uf.trim().toUpperCase(Locale.ROOT);
+    }
+
+    /** Trimmed city, or {@code null} when blank. */
+    private static String normalizeCidade(String cidade) {
+        if (cidade == null || cidade.isBlank()) {
+            return null;
+        }
+        return cidade.trim();
     }
 
     @GetMapping(value = "/placa/{placa}", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -54,6 +71,11 @@ public class AvaliacaoController {
                     3. **Mercado real** via raspagem paralela (Virtual Threads) nos \
                        marketplaces configurados (OLX, MobiAuto). A média é comparada \
                        contra a FIPE com tolerância de ±5% para gerar o score.
+
+                    **Recorte geográfico:** informe `uf` (e opcionalmente `cidade`) para \
+                    regionalizar a raspagem — cada marketplace reescreve a URL alvo no seu \
+                    próprio padrão (OLX usa subdomínio de estado, MobiAuto usa query params). \
+                    Sem `uf`, a busca degrada graciosamente para o escopo nacional.
 
                     **Privacidade:** o chassi devolvido em `dadosVeiculo` permanece \
                     mascarado, conforme contrato do módulo Placa.
@@ -93,10 +115,22 @@ public class AvaliacaoController {
             @RequestParam(required = false)
             @Pattern(regexp = CODIGO_FIPE_REGEX,
                     message = "O código FIPE deve seguir o padrão 000000-0 (6 dígitos, hífen, 1 dígito).")
-            String codigoFipe
+            String codigoFipe,
+
+            @Parameter(description = "UF para regionalizar a raspagem de mercado (sigla de 2 letras). Opcional — ausente faz a busca nacional.",
+                    example = "SP")
+            @RequestParam(required = false)
+            @Pattern(regexp = UF_REGEX, message = "A UF deve ser uma sigla de 2 letras (ex: SP, AM).")
+            String uf,
+
+            @Parameter(description = "Cidade para estreitar a raspagem dentro da UF. Opcional — só é aplicada quando `uf` também é informada.",
+                    example = "Campinas")
+            @RequestParam(required = false)
+            String cidade
     ) {
         String normalizedPlaca = placa.toUpperCase(Locale.ROOT).replace("-", "");
-        return avaliacaoService.avaliarPorPlaca(normalizedPlaca, codigoFipe);
+        return avaliacaoService.avaliarPorPlaca(
+                normalizedPlaca, codigoFipe, normalizeUf(uf), normalizeCidade(cidade));
     }
 
     @GetMapping(value = "/manual", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -118,6 +152,9 @@ public class AvaliacaoController {
                     cada scraper protegido por seu próprio Circuit Breaker; falha de um \
                     marketplace não derruba os demais; cálculo de score com tolerância \
                     de ±5% sobre a FIPE quando o `codigoFipe` é fornecido.
+
+                    **Recorte geográfico**: `uf` e `cidade` regionalizam a raspagem do \
+                    mesmo jeito da rota por placa — ausentes, a busca é nacional.
 
                     Na resposta, `placa` e `dadosVeiculo` chegam **null** — sinalização \
                     explícita de que a identificação por placa foi pulada."""
@@ -159,8 +196,20 @@ public class AvaliacaoController {
             @RequestParam(required = false)
             @Pattern(regexp = CODIGO_FIPE_REGEX,
                     message = "O código FIPE deve seguir o padrão 000000-0 (6 dígitos, hífen, 1 dígito).")
-            String codigoFipe
+            String codigoFipe,
+
+            @Parameter(description = "UF para regionalizar a raspagem de mercado (sigla de 2 letras). Opcional — ausente faz a busca nacional.",
+                    example = "SP")
+            @RequestParam(required = false)
+            @Pattern(regexp = UF_REGEX, message = "A UF deve ser uma sigla de 2 letras (ex: SP, AM).")
+            String uf,
+
+            @Parameter(description = "Cidade para estreitar a raspagem dentro da UF. Opcional — só é aplicada quando `uf` também é informada.",
+                    example = "Campinas")
+            @RequestParam(required = false)
+            String cidade
     ) {
-        return avaliacaoService.avaliarPorVeiculo(marca, modelo, ano, codigoFipe);
+        return avaliacaoService.avaliarPorVeiculo(
+                marca, modelo, ano, codigoFipe, normalizeUf(uf), normalizeCidade(cidade));
     }
 }
