@@ -30,7 +30,8 @@ spring:
   # boot continua zero-cost para self-hosts que não usam o módulo.
   autoconfigure:
     exclude:
-      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.health.DataSourceHealthContributorAutoConfiguration
 
 server:
   port: 8080
