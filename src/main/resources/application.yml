@@ -392,6 +392,10 @@ gateway:
     mobiauto:
       base-url: https://www.mobiauto.com.br
       search-path: /comprar/{marca}/{modelo}/{ano}
+      # Roteamento geográfico: a MobiAuto segmenta região via query params no
+      # mesmo host. ?uf=SP&cidade=Campinas vira ?estado=sp&cidade=campinas;
+      # o segmento {cidade} é podado quando a cidade não é informada.
+      region-query-template: "?estado={uf}&cidade={cidade}"
       timeout-millis: 5000
       user-agent: Mozilla/5.0 (compatible; GatewayNacional/1.0)
   historico:
