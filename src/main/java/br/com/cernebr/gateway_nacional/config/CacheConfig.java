@@ -153,6 +153,13 @@ public class CacheConfig {
     // repetidos; soft-TTL 7d (definido no service) dispara refresh-ahead em
     // background sem nunca travar o caller no caminho crítico.
     private static final Duration HISTORICO_VEICULAR_TTL = Duration.ofDays(30);
+    // TCO de entrada veicular — cruza a cotação FIPE com a malha fiscal
+    // estadual (alíquota de IPVA + taxa de transferência do Detran). As duas
+    // pontas variam pouco: alíquotas/taxas estaduais viram uma vez ao ano
+    // (lei orçamentária estadual) e o valor FIPE subjacente já tem cache de
+    // 15 dias. 30 dias hard absorve o ciclo anual com folga; soft-TTL 15d via
+    // RAC dispara refresh oportunista entre publicações sem recalcular no hot path.
+    private static final Duration TCO_ENTRADA_VEICULAR_TTL = Duration.ofDays(30);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
@@ -189,6 +196,7 @@ public class CacheConfig {
     private static final String CND_CACHE = "cnd";
     public static final String SIGTAP_CACHE = "sigtap";
     private static final String HISTORICO_VEICULAR_CACHE = "historicoVeicular";
+    private static final String TCO_ENTRADA_VEICULAR_CACHE = "tcoEntradaVeicular";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -229,7 +237,8 @@ public class CacheConfig {
                 Map.entry(SINTEGRA_CACHE, baseConfig().entryTtl(SINTEGRA_TTL)),
                 Map.entry(CND_CACHE, baseConfig().entryTtl(CND_TTL)),
                 Map.entry(SIGTAP_CACHE, baseConfig().entryTtl(SIGTAP_TTL)),
-                Map.entry(HISTORICO_VEICULAR_CACHE, baseConfig().entryTtl(HISTORICO_VEICULAR_TTL))
+                Map.entry(HISTORICO_VEICULAR_CACHE, baseConfig().entryTtl(HISTORICO_VEICULAR_TTL)),
+                Map.entry(TCO_ENTRADA_VEICULAR_CACHE, baseConfig().entryTtl(TCO_ENTRADA_VEICULAR_TTL))
         );
 
         return RedisCacheManager.builder(connectionFactory)
