@@ -2,6 +2,7 @@ package br.com.cernebr.gateway_nacional.cadastral.cep.service;
 
 import br.com.cernebr.gateway_nacional.cadastral.cep.dto.CepResponse;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import tools.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -37,7 +38,7 @@ public class IbgeEnrichmentService {
     private static final String DATA_FILE = "data/municipios_ibge.json";
 
     private final ObjectMapper objectMapper;
-    private Map<String, String> ibgeByLocation = Map.of();
+    private Map<String, MunicipioIbgeEntry> entryByLocation = Map.of();
 
     public IbgeEnrichmentService(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
@@ -52,17 +53,17 @@ public class IbgeEnrichmentService {
                             .constructCollectionType(List.class, MunicipioIbgeEntry.class)
             );
 
-            Map<String, String> map = new HashMap<>(entries.size() * 2);
+            Map<String, MunicipioIbgeEntry> map = new HashMap<>(entries.size() * 2);
             for (MunicipioIbgeEntry entry : entries) {
                 String key = buildKey(entry.uf(), entry.localidade());
                 if (key != null && entry.ibge() != null && !entry.ibge().isBlank()) {
-                    map.put(key, entry.ibge());
+                    map.put(key, entry);
                 }
             }
             // Defensive immutable snapshot — read path becomes lock-free and tamper-proof.
-            this.ibgeByLocation = Map.copyOf(map);
+            this.entryByLocation = Map.copyOf(map);
             log.info("IBGE registry loaded: {} municipalities indexed from {}",
-                    this.ibgeByLocation.size(), DATA_FILE);
+                    this.entryByLocation.size(), DATA_FILE);
         } catch (IOException ex) {
             // Degrade gracefully: gateway keeps serving with potentially null ibge fields
             // rather than failing application bootstrap.
@@ -87,18 +88,15 @@ public class IbgeEnrichmentService {
         if (key == null) {
             return response;
         }
-        String ibge = ibgeByLocation.get(key);
-        if (ibge == null) {
+        MunicipioIbgeEntry entry = entryByLocation.get(key);
+        if (entry == null) {
             return response;
         }
 
         log.debug("IBGE in-memory enrichment hit for uf={} localidade={} -> {}",
-                response.uf(), response.localidade(), ibge);
+                response.uf(), response.localidade(), entry.ibge());
 
-        // withIbge preserva a localização eventualmente já preenchida por um
-        // provider tier-1 (AwesomeAPI traz lat/lng grátis) — não a sobrescreve
-        // com null como o construtor de 7 args faria.
-        return response.withIbge(ibge);
+        return response.withIbge(entry.ibge(), entry.siafi(), entry.ddd());
     }
 
     private static String buildKey(String uf, String localidade) {
@@ -115,6 +113,16 @@ public class IbgeEnrichmentService {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record MunicipioIbgeEntry(String uf, String localidade, String ibge) {
+    private record MunicipioIbgeEntry(
+            String uf,
+            String localidade,
+            String ibge,
+            Double latitude,
+            Double longitude,
+            Boolean capital,
+            String siafi,
+            Integer ddd,
+            @JsonProperty("fuso_horario") String fusoHorario
+    ) {
     }
 }

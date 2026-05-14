@@ -16,31 +16,43 @@ import java.util.Optional;
 /**
  * Geocodificação reversa via Nominatim/OpenStreetMap.
  *
- * <p>Recebe latitude e longitude e devolve o endereço e o CEP correspondentes,
- * resolvidos pelo {@code GET /reverse?format=jsonv2&lat={lat}&lon={lon}&addressdetails=1}
- * do Nominatim. É a peça que habilita a funcionalidade "clique no mapa → retorna CEP".</p>
+ * <p>
+ * Recebe latitude e longitude e devolve o endereço e o CEP correspondentes,
+ * resolvidos pelo
+ * {@code GET /reverse?format=jsonv2&lat={lat}&lon={lon}&addressdetails=1}
+ * do Nominatim. É a peça que habilita a funcionalidade "clique no mapa →
+ * retorna CEP".
+ * </p>
  *
  * <h2>Mapeamento para CepResponse</h2>
  * <ul>
- *   <li>{@code cep} ← {@code address.postcode} (limpo de hífen)</li>
- *   <li>{@code logradouro} ← {@code address.road}</li>
- *   <li>{@code bairro} ← {@code address.suburb} ou {@code address.neighbourhood}</li>
- *   <li>{@code localidade} ← {@code address.city} ou {@code address.town} ou {@code address.village}</li>
- *   <li>{@code uf} ← {@code address.state_code} (ISO 3166-2:BR → 2 chars sem prefixo)</li>
- *   <li>{@code localizacao} ← lat/lon fornecidos pelo caller (precisão EXATA — ponto do mapa)</li>
+ * <li>{@code cep} ← {@code address.postcode} (limpo de hífen)</li>
+ * <li>{@code logradouro} ← {@code address.road}</li>
+ * <li>{@code bairro} ← {@code address.suburb} ou
+ * {@code address.neighbourhood}</li>
+ * <li>{@code localidade} ← {@code address.city} ou {@code address.town} ou
+ * {@code address.village}</li>
+ * <li>{@code uf} ← {@code address.state_code} (ISO 3166-2:BR → 2 chars sem
+ * prefixo)</li>
+ * <li>{@code localizacao} ← lat/lon fornecidos pelo caller (precisão EXATA —
+ * ponto do mapa)</li>
  * </ul>
  *
  * <h2>Quando retorna Optional.empty()</h2>
  * <ul>
- *   <li>O Nominatim não encontrou nenhum endereço para as coordenadas (zona remota, oceano).</li>
- *   <li>O resultado encontrado não possui {@code address.postcode} (estrada sem CEP).</li>
+ * <li>O Nominatim não encontrou nenhum endereço para as coordenadas (zona
+ * remota, oceano).</li>
+ * <li>O resultado encontrado não possui {@code address.postcode} (estrada sem
+ * CEP).</li>
  * </ul>
  *
  * <h2>Política do Nominatim</h2>
- * <p>Usuário deve fornecer {@code User-Agent} identificável; servidor público
+ * <p>
+ * Usuário deve fornecer {@code User-Agent} identificável; servidor público
  * limita ~1 req/s por IP. O cache Redis (TTL 30d) absorve a maior parte das
  * consultas recorrentes de coordenadas próximas. Para deploys de alto volume,
- * apontar {@code gateway.cep.nominatim.base-url} para instância privada.</p>
+ * apontar {@code gateway.cep.nominatim.base-url} para instância privada.
+ * </p>
  */
 @Slf4j
 @Component
@@ -66,8 +78,10 @@ public class NominatimReversoClient {
      *
      * @param lat latitude WGS84 em graus decimais
      * @param lon longitude WGS84 em graus decimais
-     * @return optional com o {@link CepResponse} preenchido, ou empty se sem resultado
-     * @throws ResourceUnavailableException quando o Nominatim falha ou o CB está aberto
+     * @return optional com o {@link CepResponse} preenchido, ou empty se sem
+     *         resultado
+     * @throws ResourceUnavailableException quando o Nominatim falha ou o CB está
+     *                                      aberto
      */
     @CircuitBreaker(name = "nominatimReversoCB", fallbackMethod = "fallback")
     public Optional<CepResponse> reverso(BigDecimal lat, BigDecimal lon) {
@@ -107,9 +121,10 @@ public class NominatimReversoClient {
                 bairro,
                 localidade,
                 uf,
-                null,    // ibge: preenchido pelo IbgeEnrichmentService depois
-                loc
-        );
+                null, // ibge: preenchido pelo IbgeEnrichmentService depois
+                null,
+                null,
+                loc);
 
         log.debug("Nominatim reverso resolvido: cep={} localidade={} uf={}", cep, localidade, uf);
         return Optional.of(response);
@@ -136,8 +151,8 @@ public class NominatimReversoClient {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record NominatimReverseResult(
-            NominatimAddress address
-    ) {}
+            NominatimAddress address) {
+    }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record NominatimAddress(
@@ -149,11 +164,11 @@ public class NominatimReversoClient {
             String town,
             String village,
             String state,
-            @JsonProperty("state_code") String stateCodeRaw
-    ) {
+            @JsonProperty("state_code") String stateCodeRaw) {
         /** Retorna o postcode limpo de caracteres não-numéricos. */
         String cleanPostcode() {
-            if (postcode == null) return null;
+            if (postcode == null)
+                return null;
             return postcode.replaceAll("\\D", "");
         }
 
@@ -162,7 +177,8 @@ public class NominatimReversoClient {
          * (ex.: "BR-SP" → "SP", "SP" → "SP").
          */
         String stateCode() {
-            if (stateCodeRaw == null) return null;
+            if (stateCodeRaw == null)
+                return null;
             // ISO 3166-2 devolve "BR-SP"; queremos apenas "SP".
             int dash = stateCodeRaw.lastIndexOf('-');
             return dash >= 0 ? stateCodeRaw.substring(dash + 1) : stateCodeRaw;
@@ -170,14 +186,17 @@ public class NominatimReversoClient {
 
         /** Bairro: prefere suburb, cai em neighbourhood se ausente. */
         String bairro() {
-            if (suburb != null && !suburb.isBlank()) return suburb;
+            if (suburb != null && !suburb.isBlank())
+                return suburb;
             return neighbourhood;
         }
 
         /** Localidade: prefere city, cai em town, depois village. */
         String localidade() {
-            if (city != null && !city.isBlank()) return city;
-            if (town != null && !town.isBlank()) return town;
+            if (city != null && !city.isBlank())
+                return city;
+            if (town != null && !town.isBlank())
+                return town;
             return village;
         }
     }

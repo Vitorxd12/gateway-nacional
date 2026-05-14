@@ -38,6 +38,12 @@ public record CepResponse(
         @Schema(description = "Código IBGE do município", example = "3550308")
         String ibge,
 
+        @Schema(description = "Código SIAFI do município", example = "7107")
+        String siafi,
+
+        @Schema(description = "DDD do município", example = "11")
+        Integer ddd,
+
         @Schema(description = "Geocodificação do endereço — null quando nenhuma fonte de geo respondeu.",
                 nullable = true)
         Localizacao localizacao
@@ -50,7 +56,11 @@ public record CepResponse(
      */
     public CepResponse(String cep, String logradouro, String complemento,
                        String bairro, String localidade, String uf, String ibge) {
-        this(cep, logradouro, complemento, bairro, localidade, uf, ibge, null);
+        this(cep, logradouro, complemento, bairro, localidade, uf, ibge, null, null, null);
+    }
+
+    public CepResponse withIbge(String ibgeNovo, String siafiNovo, Integer dddNovo) {
+        return new CepResponse(cep, logradouro, complemento, bairro, localidade, uf, ibgeNovo, siafiNovo, dddNovo, localizacao);
     }
 
     /**
@@ -59,7 +69,7 @@ public record CepResponse(
      * para back-fill sem perder a localização eventualmente já preenchida.
      */
     public CepResponse withIbge(String ibgeNovo) {
-        return new CepResponse(cep, logradouro, complemento, bairro, localidade, uf, ibgeNovo, localizacao);
+        return new CepResponse(cep, logradouro, complemento, bairro, localidade, uf, ibgeNovo, siafi, ddd, localizacao);
     }
 
     /**
@@ -68,7 +78,7 @@ public record CepResponse(
      * gera um novo registro e descarta o antigo.
      */
     public CepResponse withLocalizacao(Localizacao loc) {
-        return new CepResponse(cep, logradouro, complemento, bairro, localidade, uf, ibge, loc);
+        return new CepResponse(cep, logradouro, complemento, bairro, localidade, uf, ibge, siafi, ddd, loc);
     }
 
     @Schema(name = "CepResponse.Localizacao",

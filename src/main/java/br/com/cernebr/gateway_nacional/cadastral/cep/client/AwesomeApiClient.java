@@ -26,7 +26,7 @@ public class AwesomeApiClient implements CepClientProvider {
     private final RestClient restClient;
 
     public AwesomeApiClient(RestClient.Builder builder,
-                            @Value("${gateway.cep.awesomeapi.base-url:https://cep.awesomeapi.com.br}") String baseUrl) {
+            @Value("${gateway.cep.awesomeapi.base-url:https://cep.awesomeapi.com.br}") String baseUrl) {
         this.restClient = builder.baseUrl(baseUrl).build();
     }
 
@@ -69,15 +69,14 @@ public class AwesomeApiClient implements CepClientProvider {
             // CEPs urbanos. Aproveitamos no caminho rápido — economiza um
             // round-trip ao Nominatim quando o AwesomeAPI vence o hedge.
             String lat,
-            String lng
-    ) {
+            String lng) {
         boolean isInvalid() {
             return code == null || code.isBlank();
         }
 
         CepResponse toCepResponse() {
             Localizacao loc = parseLocalizacao();
-            return new CepResponse(code, address, null, district, city, state, cityIbge, loc);
+            return new CepResponse(code, address, null, district, city, state, cityIbge, null, null, loc);
         }
 
         private Localizacao parseLocalizacao() {
@@ -92,8 +91,7 @@ public class AwesomeApiClient implements CepClientProvider {
                         // segurança — geocodificação por CEP costuma cair no centroide
                         // do segmento de logradouro, não na numeração específica.
                         "APROXIMADA",
-                        PROVIDER_NAME
-                );
+                        PROVIDER_NAME);
             } catch (NumberFormatException ex) {
                 return null;
             }

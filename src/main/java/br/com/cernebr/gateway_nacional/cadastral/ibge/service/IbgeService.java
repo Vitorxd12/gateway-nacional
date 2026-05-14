@@ -28,6 +28,7 @@ import java.io.InputStream;
 import java.text.Normalizer;
 
 import tools.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.annotation.PostConstruct;
 import org.springframework.core.io.ClassPathResource;
 
@@ -83,7 +84,17 @@ public class IbgeService {
     private final List<MunicipioIndexEntry> allMunicipiosIndex = new CopyOnWriteArrayList<>();
 
     private record MunicipioIndexEntry(MunicipioResponse municipio, String normalizedName) {}
-    private record MunicipioJsonDto(String uf, String localidade, String ibge) {}
+    private record MunicipioJsonDto(
+        String uf, 
+        String localidade, 
+        String ibge, 
+        Double latitude, 
+        Double longitude, 
+        Boolean capital, 
+        String siafi, 
+        Integer ddd, 
+        @JsonProperty("fuso_horario") String fusoHorario
+    ) {}
 
     public IbgeService(IbgeGovClient govClient,
                        DadosAbertosBrClient dadosAbertosBrClient,
@@ -105,7 +116,16 @@ public class IbgeService {
             List<MunicipioJsonDto> rawList = objectMapper.readValue(is, 
                 objectMapper.getTypeFactory().constructCollectionType(List.class, MunicipioJsonDto.class));
             for (MunicipioJsonDto dto : rawList) {
-                MunicipioResponse resp = new MunicipioResponse(dto.localidade().toUpperCase(Locale.ROOT), dto.ibge());
+                MunicipioResponse resp = new MunicipioResponse(
+                    dto.localidade().toUpperCase(Locale.ROOT), 
+                    dto.ibge(),
+                    dto.latitude(),
+                    dto.longitude(),
+                    dto.capital(),
+                    dto.siafi(),
+                    dto.ddd(),
+                    dto.fusoHorario()
+                );
                 municipioByCodeIndex.put(resp.codigoIbge(), resp);
                 allMunicipiosIndex.add(new MunicipioIndexEntry(resp, removeAccents(dto.localidade()).toLowerCase(Locale.ROOT)));
             }
@@ -259,7 +279,13 @@ public class IbgeService {
         List<MunicipioResponse> normalized = raw.stream()
                 .map(m -> new MunicipioResponse(
                         m.nome() == null ? null : m.nome().toUpperCase(Locale.ROOT),
-                        m.codigoIbge()))
+                        m.codigoIbge(),
+                        m.latitude(),
+                        m.longitude(),
+                        m.capital(),
+                        m.siafi(),
+                        m.ddd(),
+                        m.fusoHorario()))
                 .sorted(Comparator.comparing(
                         m -> m.codigoIbge() == null ? "" : m.codigoIbge()))
                 .toList();

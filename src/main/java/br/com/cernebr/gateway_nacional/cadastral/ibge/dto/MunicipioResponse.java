@@ -14,6 +14,16 @@ import io.swagger.v3.oas.annotations.media.Schema;
 public record MunicipioResponse(
         @Schema(example = "SÃO PAULO") String nome,
         @JsonProperty("codigo_ibge")
-        @Schema(name = "codigo_ibge", example = "3550308") String codigoIbge
+        @Schema(name = "codigo_ibge", example = "3550308") String codigoIbge,
+        @Schema(example = "-23.5505") Double latitude,
+        @Schema(example = "-46.6333") Double longitude,
+        @Schema(example = "true") Boolean capital,
+        @Schema(example = "7107") String siafi,
+        @Schema(example = "11") Integer ddd,
+        @JsonProperty("fuso_horario")
+        @Schema(name = "fuso_horario", example = "America/Sao_Paulo") String fusoHorario
 ) {
+    public MunicipioResponse(String nome, String codigoIbge) {
+        this(nome, codigoIbge, null, null, null, null, null, null);
+    }
 }
