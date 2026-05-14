@@ -3,6 +3,7 @@ package br.com.cernebr.gateway_nacional.veicular.avaliacao.service;
 import br.com.cernebr.gateway_nacional.veicular.avaliacao.client.MercadoClientProvider;
 import br.com.cernebr.gateway_nacional.veicular.avaliacao.dto.AvaliacaoResponse;
 import br.com.cernebr.gateway_nacional.veicular.avaliacao.dto.DadosMercado;
+import br.com.cernebr.gateway_nacional.veicular.avaliacao.dto.DetalhesAmostragem;
 import br.com.cernebr.gateway_nacional.veicular.fipe.dto.FipePrecoResponse;
 import br.com.cernebr.gateway_nacional.veicular.fipe.service.FipeService;
 import br.com.cernebr.gateway_nacional.veicular.placa.dto.PlacaResponse;
@@ -108,7 +109,7 @@ public class AvaliacaoService {
      * caller stayed silent. Result: token-free deploys still get full
      * Avaliação response, while sophisticated callers retain control.</p>
      */
-    public AvaliacaoResponse avaliarPorPlaca(String placa, String codigoFipe) {
+    public AvaliacaoResponse avaliarPorPlaca(String placa, String codigoFipe, String uf, String cidade) {
         PlacaResponse dadosVeiculo = placaService.findByPlaca(placa);
         int ano = dadosVeiculo.anoModelo() > 0 ? dadosVeiculo.anoModelo() : dadosVeiculo.anoFabricacao();
         String effectiveFipe = pickEffectiveCodigoFipe(codigoFipe, dadosVeiculo.codigoFipe());
@@ -118,7 +119,9 @@ public class AvaliacaoService {
                 dadosVeiculo.marca(),
                 dadosVeiculo.modelo(),
                 ano,
-                effectiveFipe
+                effectiveFipe,
+                uf,
+                cidade
         );
     }
 
@@ -140,8 +143,9 @@ public class AvaliacaoService {
      * the caller already knows the vehicle. {@code placa} and
      * {@code dadosVeiculo} on the response arrive {@code null} by design.
      */
-    public AvaliacaoResponse avaliarPorVeiculo(String marca, String modelo, int ano, String codigoFipe) {
-        return composeAvaliacao(null, null, marca, modelo, ano, codigoFipe);
+    public AvaliacaoResponse avaliarPorVeiculo(String marca, String modelo, int ano,
+                                               String codigoFipe, String uf, String cidade) {
+        return composeAvaliacao(null, null, marca, modelo, ano, codigoFipe, uf, cidade);
     }
 
     /**
@@ -151,20 +155,27 @@ public class AvaliacaoService {
      * not the sum. Both legs are individually exception-safe (FIPE returns
      * {@code null} on failure, scrapers degrade to empty list), so
      * {@code .join()} on either future cannot throw.
+     *
+     * <p><b>Recorte geográfico:</b> {@code uf}/{@code cidade} são repassados
+     * intactos para o fan-out de scrapers; cada marketplace decide como
+     * traduzi-los na sua URL alvo. {@code uf} ausente significa busca
+     * nacional — degradação graciosa, sem erro.</p>
      */
     private AvaliacaoResponse composeAvaliacao(String placa,
                                                PlacaResponse dadosVeiculo,
                                                String marca,
                                                String modelo,
                                                int ano,
-                                               String codigoFipe) {
+                                               String codigoFipe,
+                                               String uf,
+                                               String cidade) {
         FipePrecoResponse referenciaFipe;
         DadosMercado mercado;
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
             CompletableFuture<FipePrecoResponse> fipeFuture =
                     CompletableFuture.supplyAsync(() -> fetchFipeIfPossible(codigoFipe, ano), executor);
             CompletableFuture<DadosMercado> mercadoFuture =
-                    CompletableFuture.supplyAsync(() -> scrapeMercadoOn(marca, modelo, ano, executor), executor);
+                    CompletableFuture.supplyAsync(() -> scrapeMercadoOn(marca, modelo, ano, uf, cidade, executor), executor);
             referenciaFipe = fipeFuture.join();
             mercado = mercadoFuture.join();
         }
@@ -193,43 +204,65 @@ public class AvaliacaoService {
      * absorbed (empty list returned), so a single broken marketplace
      * cannot collapse the join.
      */
-    private DadosMercado scrapeMercadoOn(String marca, String modelo, int ano, ExecutorService executor) {
+    private DadosMercado scrapeMercadoOn(String marca, String modelo, int ano,
+                                         String uf, String cidade, ExecutorService executor) {
         List<String> linksReferencia = scrapers.stream()
-                .map(s -> s.buildSearchUrl(marca, modelo, ano))
+                .map(s -> s.buildSearchUrl(marca, modelo, ano, uf, cidade))
                 .toList();
 
         List<CompletableFuture<List<BigDecimal>>> futures = scrapers.stream()
                 .map(scraper -> CompletableFuture.supplyAsync(
-                        () -> safeFetch(scraper, marca, modelo, ano), executor))
+                        () -> safeFetch(scraper, marca, modelo, ano, uf, cidade), executor))
                 .toList();
 
-        List<BigDecimal> precos = futures.stream()
+        List<List<BigDecimal>> porScraper = futures.stream()
                 .map(CompletableFuture::join)
+                .toList();
+
+        long scrapersComRetorno = porScraper.stream().filter(l -> !l.isEmpty()).count();
+
+        List<BigDecimal> precos = porScraper.stream()
                 .flatMap(List::stream)
                 .filter(Objects::nonNull)
                 .toList();
 
-        return aggregate(precos, linksReferencia);
+        return aggregate(precos, linksReferencia, uf, cidade, scrapers.size(), (int) scrapersComRetorno);
     }
 
     private List<BigDecimal> safeFetch(MercadoClientProvider scraper,
-                                       String marca, String modelo, int ano) {
+                                       String marca, String modelo, int ano,
+                                       String uf, String cidade) {
         Timer.Sample sample = Timer.start(meterRegistry);
         try {
-            List<BigDecimal> precos = scraper.fetchPrecos(marca, modelo, ano);
+            List<BigDecimal> precos = scraper.fetchPrecos(marca, modelo, ano, uf, cidade);
             recordOutcome(scraper.providerName(), "success", sample);
             return precos != null ? precos : List.of();
         } catch (Exception ex) {
             recordOutcome(scraper.providerName(), "failure", sample);
-            log.warn("Scraper {} failed for {}-{}-{}: {}",
-                    scraper.providerName(), marca, modelo, ano, ex.getMessage());
+            log.warn("Scraper {} failed for {}-{}-{} [uf={} cidade={}]: {}",
+                    scraper.providerName(), marca, modelo, ano, uf, cidade, ex.getMessage());
             return List.of();
         }
     }
 
-    private DadosMercado aggregate(List<BigDecimal> precos, List<String> linksReferencia) {
+    /**
+     * Folds the flat price list into a {@link DadosMercado}. When a UF was
+     * supplied, every scraped price already came from a region-scoped URL —
+     * so {@code precoMedioRegional} mirrors {@code precoMedio} and the
+     * {@link DetalhesAmostragem} escopo is {@code REGIONAL}. Without a UF the
+     * regional fields stay {@code null} and the escopo is {@code NACIONAL}.
+     */
+    private DadosMercado aggregate(List<BigDecimal> precos, List<String> linksReferencia,
+                                   String uf, String cidade,
+                                   int scrapersConsultados, int scrapersComRetorno) {
+        boolean regional = uf != null && !uf.isBlank();
+        String ufOut = regional ? uf : null;
+        String cidadeOut = (regional && cidade != null && !cidade.isBlank()) ? cidade : null;
+
         if (precos.isEmpty()) {
-            return new DadosMercado(null, null, null, 0, linksReferencia);
+            DetalhesAmostragem vazia = new DetalhesAmostragem(
+                    DetalhesAmostragem.escopo(ufOut, cidadeOut), 0, scrapersConsultados, scrapersComRetorno);
+            return new DadosMercado(null, null, null, 0, ufOut, cidadeOut, null, vazia, linksReferencia);
         }
         List<BigDecimal> sorted = new ArrayList<>(precos);
         Collections.sort(sorted);
@@ -240,7 +273,13 @@ public class AvaliacaoService {
         BigDecimal soma = sorted.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal media = soma.divide(BigDecimal.valueOf(sorted.size()), 2, RoundingMode.HALF_UP);
 
-        return new DadosMercado(media, menor, maior, sorted.size(), linksReferencia);
+        BigDecimal mediaRegional = regional ? media : null;
+        DetalhesAmostragem detalhes = new DetalhesAmostragem(
+                DetalhesAmostragem.escopo(ufOut, cidadeOut), sorted.size(),
+                scrapersConsultados, scrapersComRetorno);
+
+        return new DadosMercado(media, menor, maior, sorted.size(),
+                ufOut, cidadeOut, mediaRegional, detalhes, linksReferencia);
     }
 
     private String computeScore(FipePrecoResponse fipe, DadosMercado mercado) {
