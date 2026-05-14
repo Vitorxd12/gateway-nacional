@@ -145,12 +145,14 @@ public class CacheConfig {
     // TTL agressivo na borda Redis (30 dias) — o ETL noturno invalida via
     // CacheManager.evictAll quando promove uma nova competência.
     private static final Duration SIGTAP_TTL = Duration.ofDays(30);
-    // Histórico veicular gratuito (LeilaoFree + ConsultarPlaca + PlacaFipe).
-    // As fontes públicas mudam pouco (registro de leilão é evento esporádico
-    // por placa). Hard-TTL 24h absorve bursts de dashboards anti-fraude;
-    // soft-TTL 6h (definido no service) dispara refresh em background sem
-    // estressar os Cloudflare-fronted endpoints com hits repetidos.
-    private static final Duration HISTORICO_VEICULAR_TTL = Duration.ofHours(24);
+    // Histórico veicular (premium OlhoNoCarro/Checkauto + free-tier scrapers).
+    // O passado de um veículo — se já foi a leilão ou bateu — é um dado
+    // imutável ou de baixíssima volatilidade: um registro de leilão/sinistro
+    // não "desaparece". Hard-TTL 30d blinda as fontes premium (custo por
+    // consulta) e os endpoints gratuitos Cloudflare-fronted contra hits
+    // repetidos; soft-TTL 7d (definido no service) dispara refresh-ahead em
+    // background sem nunca travar o caller no caminho crítico.
+    private static final Duration HISTORICO_VEICULAR_TTL = Duration.ofDays(30);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";

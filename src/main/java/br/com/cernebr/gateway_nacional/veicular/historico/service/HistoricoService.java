@@ -33,11 +33,13 @@ import java.util.concurrent.TimeoutException;
  * orchestrator only escalates to 503 when <i>every</i> source failed
  * AND no usable evidence was collected.</p>
  *
- * <p><b>Cache:</b> {@link RefreshAheadCache} with soft TTL 6h / hard TTL
- * 24h on the {@code historicoVeicular} cache. Soft-TTL hits serve the
- * cached DTO while a background virtual thread refreshes — this dampens
- * traffic on the rate-limited free-tier sources (Cloudflare aggressively
- * throttles repeat hits to the same placa from the same IP).</p>
+ * <p><b>Cache:</b> {@link RefreshAheadCache} with soft TTL 7d / hard TTL
+ * 30d on the {@code historicoVeicular} cache. Vehicle history is
+ * near-immutable — a leilão/sinistro record does not vanish — so a long
+ * window is correct, not aggressive. Soft-TTL hits serve the cached DTO
+ * while a background virtual thread refreshes; this dampens traffic on the
+ * rate-limited free-tier sources (Cloudflare throttles repeat hits) and on
+ * the metered premium APIs (cost per consulta).</p>
  */
 @Slf4j
 @Service
@@ -57,7 +59,15 @@ public class HistoricoService {
      */
     private static final Duration HARD_TIMEOUT = Duration.ofSeconds(12);
 
-    private static final Duration CACHE_SOFT_TTL = Duration.ofHours(6);
+    /**
+     * Soft TTL for the refresh-ahead window. 7 days because vehicle history
+     * is near-immutable — a leilão/sinistro record does not vanish, so a
+     * week-old consolidation is still authoritative. Hits past the soft TTL
+     * serve the cached DTO instantly while a background virtual thread
+     * refreshes; sits well inside the 30-day hard TTL configured on the
+     * {@code historicoVeicular} cache.
+     */
+    private static final Duration CACHE_SOFT_TTL = Duration.ofDays(7);
 
     private final List<HistoricoScraperClient> scrapers;
     private final MeterRegistry meterRegistry;
