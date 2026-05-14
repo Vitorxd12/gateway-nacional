@@ -412,6 +412,11 @@ gateway:
       # via env GATEWAY_OLHONOCARRO_KEY (vazia por padrão → provider pulado).
       base-url: ${GATEWAY_HISTORICO_OLHONOCARRO_URL:https://api.olhonocarro.com.br}
       api-key: ${GATEWAY_OLHONOCARRO_KEY:}
+    checkauto:
+      # Provider premium oficial — autenticação via header X-API-KEY.
+      # Chave injetada via env GATEWAY_CHECKAUTO_KEY (vazia por padrão).
+      base-url: ${GATEWAY_HISTORICO_CHECKAUTO_URL:https://api.checkauto.com.br}
+      api-key: ${GATEWAY_CHECKAUTO_KEY:}
     leilaofree:
       base-url: ${GATEWAY_HISTORICO_LEILAOFREE_URL:https://leilaofree.com.br}
       timeout-millis: 8000
@@ -583,6 +588,8 @@ resilience4j:
       # está configurada o client curto-circuita pré-flight, o que tripa
       # o CB rapidamente e acelera o fallback para os scrapers.
       olhoNoCarroCB:
+        baseConfig: default
+      checkautoCB:
         baseConfig: default
       # Histórico veicular (free-tier scrapers) — CBs isolados para que
       # falha do LeilaoFree (Cloudflare/523) não contamine a percepção
@@ -823,6 +830,9 @@ resilience4j:
       # sem Cloudflare: 5s sobra para o round-trip autenticado. CB isolado
       # dos scrapers para failure mode independente.
       olhoNoCarroCB:
+        baseConfig: default
+        timeoutDuration: 5s
+      checkautoCB:
         baseConfig: default
         timeoutDuration: 5s
       # Histórico veicular — timeoutDuration 10s para dar margem ao
