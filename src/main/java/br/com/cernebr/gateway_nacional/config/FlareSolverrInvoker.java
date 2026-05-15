@@ -8,14 +8,18 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
 import java.net.URLEncoder;
+import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 /**
@@ -62,10 +66,36 @@ public class FlareSolverrInvoker {
                                @Value("${gateway.flaresolverr.max-timeout-ms:60000}") int maxTimeoutMs) {
         this.maxTimeoutMs = maxTimeoutMs;
         this.enabled = flaresolverrUrl != null && !flaresolverrUrl.isBlank();
-        this.restClient = enabled ? builder.baseUrl(flaresolverrUrl).build() : null;
+        // O builder global ({@link RestClientConfig}) carrega readTimeout=5s para
+        // proteger chamadas curtas a APIs REST. Chamadas ao FlareSolverr rodam
+        // Chromium headless e tipicamente levam 8–30s; usar o timeout global
+        // dispararia ResourceAccessException antes do sidecar responder. Por
+        // isso o invoker monta seu próprio RestClient com readTimeout alinhado
+        // ao {@code maxTimeoutMs} configurado (+ 5s de folga para o handshake).
+        this.restClient = enabled
+                ? builder.requestFactory(buildLongReadFactory(maxTimeoutMs))
+                        .baseUrl(flaresolverrUrl)
+                        .build()
+                : null;
         if (enabled) {
-            log.info("FlareSolverr sidecar configured at {}", flaresolverrUrl);
+            log.info("FlareSolverr sidecar configured at {} (read-timeout={}ms)",
+                    flaresolverrUrl, maxTimeoutMs + 5000);
         }
+    }
+
+    /**
+     * Cria um {@link JdkClientHttpRequestFactory} dedicado com leitura tolerante
+     * à latência do FlareSolverr. Usa um executor de virtual threads próprio
+     * para não competir pelo executor global do {@link HttpClient} padrão.
+     */
+    private static JdkClientHttpRequestFactory buildLongReadFactory(int maxTimeoutMs) {
+        HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(3))
+                .executor(Executors.newVirtualThreadPerTaskExecutor())
+                .build();
+        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(httpClient);
+        factory.setReadTimeout(Duration.ofMillis((long) maxTimeoutMs + 5_000L));
+        return factory;
     }
 
     /**
