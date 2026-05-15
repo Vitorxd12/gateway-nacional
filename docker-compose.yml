@@ -45,6 +45,17 @@ services:
       # o Selenium driver e expõe um endpoint REST consumido por este Java.
       # Sem esta variável, /api/v1/saude/sisab/* responde 503 com mensagem clara.
       GATEWAY_SISAB_SIDECAR_URL: http://sisab-sidecar:8000
+      # ── Histórico Veicular Premium (orquestração híbrida) ────────────────
+      # Com a chave preenchida, o gateway consome a API premium oficial em
+      # milissegundos. Vazia (default), o client premium curto-circuita e a
+      # malha de scrapers gratuitos assume como fallback de resiliência.
+      GATEWAY_OLHONOCARRO_KEY: ${GATEWAY_OLHONOCARRO_KEY:-}
+      GATEWAY_CHECKAUTO_KEY: ${GATEWAY_CHECKAUTO_KEY:-}
+      # ── Motor de depreciação automática por risco ────────────────────────
+      # Redutor sobre o preço de mercado quando há indício de leilão/sinistro.
+      # Clampeado à faixa mandatória [0.20, 0.30] no boot.
+      GATEWAY_VEICULAR_RISCO_REDUTOR_MEDIO: ${GATEWAY_VEICULAR_RISCO_REDUTOR_MEDIO:-0.20}
+      GATEWAY_VEICULAR_RISCO_REDUTOR_ALTO: ${GATEWAY_VEICULAR_RISCO_REDUTOR_ALTO:-0.30}
     depends_on:
       redis:
         condition: service_healthy

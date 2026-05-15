@@ -7,6 +7,7 @@ import org.springframework.data.redis.serializer.SerializationException;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
@@ -28,6 +29,13 @@ import java.util.Map;
 @Slf4j
 @Configuration
 @EnableCaching
+// Profile "no-redis" desliga toda a infra Redis para validação local sem
+// sidecar (curl direto contra a rota de avaliação). Em produção/dev padrão,
+// o profile não é ativado e o RedisCacheManager funciona normalmente.
+// O fallback {@link NoRedisCacheConfig} entrega um {@code SimpleCacheManager}
+// em memória para que o RefreshAheadCache e os @Cacheable existentes
+// continuem operacionais sem quebra de injeção.
+@Profile("!no-redis")
 public class CacheConfig {
 
     private static final Duration DEFAULT_TTL = Duration.ofHours(24);
@@ -145,12 +153,35 @@ public class CacheConfig {
     // TTL agressivo na borda Redis (30 dias) — o ETL noturno invalida via
     // CacheManager.evictAll quando promove uma nova competência.
     private static final Duration SIGTAP_TTL = Duration.ofDays(30);
-    // Histórico veicular gratuito (LeilaoFree + ConsultarPlaca + PlacaFipe).
-    // As fontes públicas mudam pouco (registro de leilão é evento esporádico
-    // por placa). Hard-TTL 24h absorve bursts de dashboards anti-fraude;
-    // soft-TTL 6h (definido no service) dispara refresh em background sem
-    // estressar os Cloudflare-fronted endpoints com hits repetidos.
-    private static final Duration HISTORICO_VEICULAR_TTL = Duration.ofHours(24);
+    // Histórico veicular (premium OlhoNoCarro/Checkauto + free-tier scrapers).
+    // O passado de um veículo — se já foi a leilão ou bateu — é um dado
+    // imutável ou de baixíssima volatilidade: um registro de leilão/sinistro
+    // não "desaparece". Hard-TTL 30d blinda as fontes premium (custo por
+    // consulta) e os endpoints gratuitos Cloudflare-fronted contra hits
+    // repetidos; soft-TTL 7d (definido no service) dispara refresh-ahead em
+    // background sem nunca travar o caller no caminho crítico.
+    private static final Duration HISTORICO_VEICULAR_TTL = Duration.ofDays(30);
+    // TCO de entrada veicular — cruza a cotação FIPE com a malha fiscal
+    // estadual (alíquota de IPVA + taxa de transferência do Detran). As duas
+    // pontas variam pouco: alíquotas/taxas estaduais viram uma vez ao ano
+    // (lei orçamentária estadual) e o valor FIPE subjacente já tem cache de
+    // 15 dias. 30 dias hard absorve o ciclo anual com folga; soft-TTL 15d via
+    // RAC dispara refresh oportunista entre publicações sem recalcular no hot path.
+    private static final Duration TCO_ENTRADA_VEICULAR_TTL = Duration.ofDays(30);
+    // KBB Avaliação Técnica — extração de bandas Lojista/Particular via
+    // FlareSolverr + Jsoup. O KBB reprocessa sua tabela em ciclos semanais,
+    // então 10d hard absorve o ciclo com folga sem servir snapshots
+    // arqueológicos. Soft-TTL 7d (definido em KbbAvaliacaoService) dispara
+    // refresh-ahead em background, mantendo a latência percebida em
+    // sub-milissegundos enquanto o Chromium recarrega o portal.
+    private static final Duration KBB_AVALIACAO_TTL = Duration.ofDays(10);
+    // CNPJ consolidado — dados cadastrais de PJ têm volatilidade baixíssima
+    // (mudança de razão social/situação cadastral acontece em janelas mensais
+    // ou maiores). 30 dias hard absorve quase 100% das consultas repetidas
+    // por integradores; soft-TTL de 24h (definido no service) garante que
+    // qualquer alteração propague em ≤ 1 dia útil via refresh-ahead em
+    // background, sem martelar os 5 providers no caminho crítico.
+    private static final Duration CNPJ_CONSOLIDADO_TTL = Duration.ofDays(30);
 
     private static final String CEPS_CACHE = "ceps";
     private static final String FERIADOS_CACHE = "feriados";
@@ -187,6 +218,9 @@ public class CacheConfig {
     private static final String CND_CACHE = "cnd";
     public static final String SIGTAP_CACHE = "sigtap";
     private static final String HISTORICO_VEICULAR_CACHE = "historicoVeicular";
+    private static final String TCO_ENTRADA_VEICULAR_CACHE = "tcoEntradaVeicular";
+    private static final String KBB_AVALIACAO_CACHE = "kbbAvaliacao";
+    private static final String CNPJ_CONSOLIDADO_CACHE = "cnpjsConsolidados";
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
@@ -227,7 +261,10 @@ public class CacheConfig {
                 Map.entry(SINTEGRA_CACHE, baseConfig().entryTtl(SINTEGRA_TTL)),
                 Map.entry(CND_CACHE, baseConfig().entryTtl(CND_TTL)),
                 Map.entry(SIGTAP_CACHE, baseConfig().entryTtl(SIGTAP_TTL)),
-                Map.entry(HISTORICO_VEICULAR_CACHE, baseConfig().entryTtl(HISTORICO_VEICULAR_TTL))
+                Map.entry(HISTORICO_VEICULAR_CACHE, baseConfig().entryTtl(HISTORICO_VEICULAR_TTL)),
+                Map.entry(TCO_ENTRADA_VEICULAR_CACHE, baseConfig().entryTtl(TCO_ENTRADA_VEICULAR_TTL)),
+                Map.entry(KBB_AVALIACAO_CACHE, baseConfig().entryTtl(KBB_AVALIACAO_TTL)),
+                Map.entry(CNPJ_CONSOLIDADO_CACHE, baseConfig().entryTtl(CNPJ_CONSOLIDADO_TTL))
         );
 
         return RedisCacheManager.builder(connectionFactory)

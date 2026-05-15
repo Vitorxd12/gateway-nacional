@@ -25,7 +25,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
  * reflects that the comparison was skipped.</p>
  */
 @Schema(name = "AvaliacaoResponse",
-        description = "Avaliação consolidada cruzando (opcionalmente) dados de placa, (opcionalmente) FIPE e mercado real.")
+        description = "Avaliação consolidada cruzando (opcionalmente) dados de placa, (opcionalmente) FIPE, mercado real e Avaliação Técnica KBB.")
 public record AvaliacaoResponse(
         @Schema(description = "Placa normalizada (uppercase, sem hífen). **null** quando a avaliação foi feita via /manual.",
                 example = "ABC1D23", nullable = true)
@@ -44,6 +44,10 @@ public record AvaliacaoResponse(
 
         @Schema(description = "Veredito comparando preço médio de mercado contra FIPE",
                 example = "Acima da FIPE")
-        String scoreAvaliacao
+        String scoreAvaliacao,
+
+        @Schema(description = "Avaliação Técnica KBB — bandas Lojista vs. Particular, multiplicador por conservação. "
+                + "Sempre presente: quando indisponível, vem com `disponivel=false` e mensagem explicativa.")
+        PrecoKbbDTO avaliacaoKbb
 ) {
 }
