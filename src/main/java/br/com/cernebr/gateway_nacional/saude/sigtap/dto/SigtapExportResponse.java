@@ -23,22 +23,31 @@ public record SigtapExportResponse(
         @Schema(description = "Carimbo de geração do dump", example = "2026-05-13T03:42:11Z")
         OffsetDateTime geradoEm,
 
-        @Schema(description = "Total de procedimentos no dump", example = "4528")
+        @Schema(description = "Página atual (0-based)", example = "0")
+        int pagina,
+
+        @Schema(description = "Tamanho da página", example = "500")
+        int tamanhoPagina,
+
+        @Schema(description = "Total de páginas disponíveis", example = "10")
+        int totalPaginas,
+
+        @Schema(description = "Total de procedimentos no dataset completo", example = "4528")
         int totalProcedimentos,
 
-        @Schema(description = "Lista de procedimentos com taxonomia e valores embutidos")
+        @Schema(description = "Lista de procedimentos (recorte da página)")
         List<SigtapProcedimentoResponse> procedimentos,
 
-        @Schema(description = "Mapa código→nome dos CBOs presentes no recorte SIGTAP")
+        @Schema(description = "Mapa código→nome dos CBOs (presentes no recorte desta página)")
         Map<String, String> cbos,
 
-        @Schema(description = "Mapa código→nome dos CID-10 presentes")
+        @Schema(description = "Mapa código→nome dos CID-10 (presentes no recorte desta página)")
         Map<String, String> cids,
 
-        @Schema(description = "Relação procedimento → lista de CBOs que faturam")
+        @Schema(description = "Relação procedimento → lista de CBOs (recorte da página)")
         Map<String, List<String>> procedimentoCbo,
 
-        @Schema(description = "Relação procedimento → lista de CIDs autorizados")
+        @Schema(description = "Relação procedimento → lista de CIDs (recorte da página)")
         Map<String, List<String>> procedimentoCid
 ) {
 }

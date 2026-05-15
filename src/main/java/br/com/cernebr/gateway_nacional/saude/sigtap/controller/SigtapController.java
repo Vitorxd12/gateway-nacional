@@ -168,10 +168,13 @@ public class SigtapController {
     }
 
     @GetMapping(value = "/exportacao/mes-atual", produces = MediaType.APPLICATION_JSON_VALUE)
-    @Operation(summary = "Dump JSON denormalizado da competência ativa",
-            description = "Documento completo com procedimentos + mapas auxiliares CBO/CID + relacionamentos. Substitui o pacote posicional legado do DataSUS por payload já mastigado.")
-    public SigtapExportResponse exportar() {
-        return service.exportarMesAtual();
+    @Operation(summary = "Dump JSON denormalizado da competência ativa (Paginado)",
+            description = "Gera um recorte paginado da competência ativa. Substitui o pacote posicional legado por payload mastigado, permitindo consumo fragmentado por sistemas com restrição de memória.")
+    public SigtapExportResponse exportar(
+            @Parameter(description = "Página (0-based)") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Tamanho da página") @RequestParam(defaultValue = "500") int size
+    ) {
+        return service.exportarMesAtual(page, Math.max(1, Math.min(size, 2000)));
     }
 
     @GetMapping(value = "/auditoria", produces = MediaType.APPLICATION_JSON_VALUE)
