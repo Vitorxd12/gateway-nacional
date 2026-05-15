@@ -1,0 +1,38 @@
+[
+  {
+    "fipeCode": "005340-0",
+    "kbbId": 15208,
+    "slugMarca": "volkswagen",
+    "slugModelo": "gol",
+    "slugVersao": "g6-city-1-0-8v-flex-2p",
+    "categoria": "hatchback",
+    "anoModelo": 2015,
+    "urlTemplate": "https://kbb.com.br/sp/2015/hatchback/volkswagen/gol/g6-city-1-0-8v-flex-2p/15208/preco-de-{canal}/",
+    "source": "SEED",
+    "discoveredAt": "2026-05-15T00:00:00Z"
+  },
+  {
+    "fipeCode": "005340-0",
+    "kbbId": 3217,
+    "slugMarca": "volkswagen",
+    "slugModelo": "gol",
+    "slugVersao": "1-0-flex",
+    "categoria": "hatchback",
+    "anoModelo": 2018,
+    "urlTemplate": "https://kbb.com.br/sp/2018/hatchback/volkswagen/gol/1-0-flex/3217/preco-de-{canal}/",
+    "source": "SEED",
+    "discoveredAt": "2026-05-15T00:00:00Z"
+  },
+  {
+    "fipeCode": "005340-0",
+    "kbbId": 1294,
+    "slugMarca": "volkswagen",
+    "slugModelo": "saveiro",
+    "slugVersao": "ce-g5-1-6-8v-flex",
+    "categoria": "picape",
+    "anoModelo": 2011,
+    "urlTemplate": "https://kbb.com.br/sp/2011/picape/volkswagen/saveiro/ce-g5-1-6-8v-flex/1294/preco-de-{canal}/",
+    "source": "SEED",
+    "discoveredAt": "2026-05-15T00:00:00Z"
+  }
+]
