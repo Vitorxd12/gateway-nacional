@@ -3,8 +3,10 @@ package br.com.cernebr.gateway_nacional.veicular.avaliacao.client;
 import br.com.cernebr.gateway_nacional.config.FlareSolverrInvoker;
 import br.com.cernebr.gateway_nacional.exception.ResourceUnavailableException;
 import br.com.cernebr.gateway_nacional.veicular.avaliacao.dto.FaixaPrecoKbb;
+import br.com.cernebr.gateway_nacional.veicular.avaliacao.dto.KbbRouteDTO;
 import br.com.cernebr.gateway_nacional.veicular.avaliacao.dto.PrecoKbbDTO;
 import br.com.cernebr.gateway_nacional.veicular.avaliacao.dto.VariacaoConservacaoKbb;
+import br.com.cernebr.gateway_nacional.veicular.avaliacao.service.KbbDiscoveryService;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
@@ -16,6 +18,7 @@ import java.math.RoundingMode;
 import java.time.Year;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -139,6 +142,7 @@ public class KbbScraperClient implements KbbClientProvider {
     private final BigDecimal conservacaoRegular;
     private final int kmPorAno;
     private final FlareSolverrInvoker flareSolverr;
+    private final KbbDiscoveryService discoveryService;
     private final ExecutorService channelExecutor =
             Executors.newVirtualThreadPerTaskExecutor();
 
@@ -150,7 +154,8 @@ public class KbbScraperClient implements KbbClientProvider {
             @Value("${gateway.avaliacao.kbb.conservacao.bom:0.95}") BigDecimal conservacaoBom,
             @Value("${gateway.avaliacao.kbb.conservacao.regular:0.87}") BigDecimal conservacaoRegular,
             @Value("${gateway.avaliacao.kbb.km-por-ano:15000}") int kmPorAno,
-            FlareSolverrInvoker flareSolverr) {
+            FlareSolverrInvoker flareSolverr,
+            KbbDiscoveryService discoveryService) {
         this.baseUrl = baseUrl;
         this.searchPathTemplate = searchPathTemplate;
         this.defaultCategoria = defaultCategoria;
@@ -159,19 +164,35 @@ public class KbbScraperClient implements KbbClientProvider {
         this.conservacaoRegular = conservacaoRegular;
         this.kmPorAno = kmPorAno;
         this.flareSolverr = flareSolverr;
+        this.discoveryService = discoveryService;
     }
 
     @Override
     @CircuitBreaker(name = "kbbScraperCB", fallbackMethod = "fallback")
     public PrecoKbbDTO fetchPreco(String codigoFipe, String marca, String modelo, int anoModelo) {
-        String urlReferencia = buildSearchUrl(codigoFipe, marca, modelo, anoModelo);
         if (!flareSolverr.isEnabled()) {
             log.info("KBB: FlareSolverr desligado — devolvendo indisponível graciosamente.");
-            return PrecoKbbDTO.indisponivel(codigoFipe, urlReferencia, FLARE_REQUIRED_MESSAGE);
+            return PrecoKbbDTO.indisponivel(codigoFipe,
+                    buildLegacyChannelUrl(marca, modelo, anoModelo, "particular"),
+                    FLARE_REQUIRED_MESSAGE);
         }
 
-        String urlTroca = buildChannelUrl(marca, modelo, anoModelo, "troca");
-        String urlParticular = buildChannelUrl(marca, modelo, anoModelo, "particular");
+        Optional<KbbRouteDTO> rota = discoveryService.discover(codigoFipe, marca, modelo, anoModelo);
+        if (rota.isEmpty()) {
+            String fallbackUrl = buildLegacyChannelUrl(marca, modelo, anoModelo, "particular");
+            log.warn("KBB: Discovery não localizou rota para fipe={} ano={} — Fail-Soft com indisponivel.",
+                    codigoFipe, anoModelo);
+            return PrecoKbbDTO.indisponivel(codigoFipe, fallbackUrl,
+                    "KBB indisponível: Discovery Layer não mapeou rota canônica para FIPE=" + codigoFipe
+                            + " ano=" + anoModelo + ". O motor de busca interno não retornou correspondência.");
+        }
+        KbbRouteDTO route = rota.get();
+        String urlReferencia = route.channelUrl("particular");
+        String urlTroca = route.channelUrl("troca");
+        String urlParticular = urlReferencia;
+
+        log.info("KBB scraper recebeu rota do Discovery: source={} fipe={} ano={} kbbId={} url-particular={}",
+                route.source(), codigoFipe, anoModelo, route.kbbId(), urlParticular);
 
         CompletableFuture<ChannelResult> trocaFuture =
                 CompletableFuture.supplyAsync(() -> safeFetchChannel(urlTroca, "troca"), channelExecutor);
@@ -202,10 +223,16 @@ public class KbbScraperClient implements KbbClientProvider {
 
     @Override
     public String buildSearchUrl(String codigoFipe, String marca, String modelo, int anoModelo) {
-        // URL "guarda-chuva" exposta no DTO para auditoria — aponta para o
-        // canal /particular/ por convenção. As URLs efetivamente consultadas
-        // (troca + particular) são construídas internamente por canal.
-        return buildChannelUrl(marca, modelo, anoModelo, "particular");
+        // Audit-friendly: prefer a route already in L1 cache; never trigger
+        // dynamic discovery from a URL-builder path (would be wasteful on
+        // fallback/error paths where this is typically invoked).
+        if (codigoFipe != null && !codigoFipe.isBlank()) {
+            Optional<KbbRouteDTO> cached = discoveryService.peek(codigoFipe, anoModelo);
+            if (cached.isPresent()) {
+                return cached.get().channelUrl("particular");
+            }
+        }
+        return buildLegacyChannelUrl(marca, modelo, anoModelo, "particular");
     }
 
     @Override
@@ -221,7 +248,16 @@ public class KbbScraperClient implements KbbClientProvider {
                 "KBB indisponível ou Circuit Breaker aberto: " + cause.getClass().getSimpleName());
     }
 
-    private String buildChannelUrl(String marca, String modelo, int anoModelo, String canal) {
+    /**
+     * URL "legada" baseada apenas no slug — usada como fallback de auditoria
+     * quando o Discovery Layer ainda não tem rota canônica para o veículo. A
+     * URL produzida é determinística mas não necessariamente resolvível, já
+     * que {@code versao} e {@code kbbId} chegam vazios. Existe para preservar
+     * o contrato do DTO ({@code urlReferencia} nunca {@code null}) sem
+     * disparar uma busca dinâmica gratuita na pior hora — quando a chamada
+     * vem do path de erro.
+     */
+    private String buildLegacyChannelUrl(String marca, String modelo, int anoModelo, String canal) {
         String path = searchPathTemplate
                 .replace("{ano}", String.valueOf(anoModelo))
                 .replace("{categoria}", defaultCategoria)
