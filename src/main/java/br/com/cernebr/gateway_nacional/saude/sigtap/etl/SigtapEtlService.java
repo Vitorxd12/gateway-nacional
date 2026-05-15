@@ -47,8 +47,6 @@ import static br.com.cernebr.gateway_nacional.config.CacheConfig.SIGTAP_CACHE;
 @ConditionalOnProperty(prefix = "gateway.saude.sigtap.cron", name = "enabled", havingValue = "true")
 public class SigtapEtlService {
 
-    private static final int MIN_PROCEDIMENTOS_PARA_PROMOCAO = 1;
-
     private final SigtapJdbc jdbc;
     private final SigtapDownloader downloader;
     private final PositionalParser parser;
@@ -56,6 +54,7 @@ public class SigtapEtlService {
     private final SigtapProperties props;
     private final TransactionTemplate tx;
     private final CacheManager cacheManager;
+    private final SigtapValidator validator;
 
     public SigtapEtlService(SigtapJdbc jdbc,
                             SigtapDownloader downloader,
@@ -63,7 +62,8 @@ public class SigtapEtlService {
                             SigtapFixtureLoader fixtureLoader,
                             SigtapProperties props,
                             @Qualifier("sigtapTxTemplate") TransactionTemplate tx,
-                            CacheManager cacheManager) {
+                            CacheManager cacheManager,
+                            SigtapValidator validator) {
         this.jdbc = jdbc;
         this.downloader = downloader;
         this.parser = parser;
@@ -71,6 +71,7 @@ public class SigtapEtlService {
         this.props = props;
         this.tx = tx;
         this.cacheManager = cacheManager;
+        this.validator = validator;
     }
 
     /**
@@ -243,17 +244,13 @@ public class SigtapEtlService {
     }
 
     private void promover(long datasetId, String competencia, Path previousZip) {
-        int total = jdbc.contarProcedimentos(datasetId);
-        if (total < MIN_PROCEDIMENTOS_PARA_PROMOCAO) {
-            jdbc.markFailed(datasetId, "Validação reprovou: apenas " + total + " procedimentos no dataset.");
-            throw new SigtapEtlException("Validação reprovou: dataset com " + total +
-                    " procedimentos (mínimo=" + MIN_PROCEDIMENTOS_PARA_PROMOCAO + ").");
-        }
+        // Sanity Checks via Validator
+        validator.validar(datasetId, jdbc);
 
         tx.executeWithoutResult(status -> jdbc.promoteStagingToActive(datasetId, competencia));
         invalidarCache();
-        log.info("[SIGTAP ETL] Dataset {} (competência {}) promovido para ACTIVE — {} procedimentos.",
-                datasetId, competencia, total);
+        log.info("[SIGTAP ETL] Dataset {} (competência {}) promovido para ACTIVE.",
+                datasetId, competencia);
 
         // Apaga o ZIP antigo somente após promoção atômica bem-sucedida
         if (previousZip != null) {

@@ -453,6 +453,12 @@ public class SigtapJdbc {
                 PROCEDIMENTO_MAPPER, datasetId);
     }
 
+    public List<Procedimento> listProcedimentosPaginado(long datasetId, int page, int size) {
+        int offset = page * size;
+        return jdbc.query("SELECT * FROM sigtap_procedimento WHERE dataset_id=? ORDER BY codigo LIMIT ? OFFSET ?",
+                PROCEDIMENTO_MAPPER, datasetId, size, offset);
+    }
+
     public List<Cbo> listAllCbos(long datasetId) {
         return jdbc.query("SELECT * FROM sigtap_cbo WHERE dataset_id=? ORDER BY codigo", CBO_MAPPER, datasetId);
     }

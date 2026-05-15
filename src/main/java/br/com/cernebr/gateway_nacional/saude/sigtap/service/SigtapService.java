@@ -253,40 +253,60 @@ public class SigtapService {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    //  Dump completo (exportação)
+    //  Dump completo (exportação paginada)
     // ──────────────────────────────────────────────────────────────────
-    public SigtapExportResponse exportarMesAtual() {
+    public SigtapExportResponse exportarMesAtual(int page, int size) {
         DataAccess da = require();
         long datasetId = da.dataset.id();
 
-        List<Procedimento> procs = da.jdbc.listAllProcedimentos(datasetId);
-        List<Cbo> cbos = da.jdbc.listAllCbos(datasetId);
-        List<Cid> cids = da.jdbc.listAllCids(datasetId);
-        List<ProcedimentoCbo> relCbo = da.jdbc.listAllProcCbo(datasetId);
-        List<ProcedimentoCid> relCid = da.jdbc.listAllProcCid(datasetId);
+        int totalProcedimentos = da.jdbc.contarProcedimentos(datasetId);
+        int totalPaginas = (int) Math.ceil((double) totalProcedimentos / size);
 
+        // Busca apenas o recorte da página para procedimentos
+        List<Procedimento> procs = da.jdbc.listProcedimentosPaginado(datasetId, page, size);
+        List<String> procCodigos = procs.stream().map(Procedimento::codigo).toList();
+
+        // Mapas auxiliares (recortados apenas para o que aparece nesta página para economizar memória)
         Map<String, String> cboMap = new LinkedHashMap<>();
-        cbos.forEach(c -> cboMap.put(c.codigo(), c.nome()));
         Map<String, String> cidMap = new LinkedHashMap<>();
-        cids.forEach(c -> cidMap.put(c.codigo(), c.nome()));
-
         Map<String, List<String>> procCboMap = new LinkedHashMap<>();
-        for (ProcedimentoCbo r : relCbo) {
-            procCboMap.computeIfAbsent(r.procedimentoCodigo(), k -> new java.util.ArrayList<>())
-                    .add(r.cboCodigo());
-        }
         Map<String, List<String>> procCidMap = new LinkedHashMap<>();
-        for (ProcedimentoCid r : relCid) {
-            procCidMap.computeIfAbsent(r.procedimentoCodigo(), k -> new java.util.ArrayList<>())
-                    .add(r.cidCodigo());
+
+        for (Procedimento p : procs) {
+            String pCod = p.codigo();
+
+            // CBOs do procedimento
+            List<String> cbos = da.jdbc.cbosDoProcedimento(datasetId, pCod);
+            if (!cbos.isEmpty()) {
+                procCboMap.put(pCod, cbos);
+                for (String cboCod : cbos) {
+                    da.jdbc.findCbo(datasetId, cboCod).ifPresent(c -> cboMap.put(c.codigo(), c.nome()));
+                }
+            }
+
+            // CIDs do procedimento
+            List<ProcedimentoCid> cids = da.jdbc.cidsDoProcedimento(datasetId, pCod);
+            if (!cids.isEmpty()) {
+                List<String> cidCodigos = cids.stream().map(ProcedimentoCid::cidCodigo).toList();
+                procCidMap.put(pCod, cidCodigos);
+                for (String cidCod : cidCodigos) {
+                    da.jdbc.findCid(datasetId, cidCod).ifPresent(c -> cidMap.put(c.codigo(), c.nome()));
+                }
+            }
         }
 
         return new SigtapExportResponse(
                 da.dataset.competencia(),
                 OffsetDateTime.now(ZoneOffset.UTC),
-                procs.size(),
+                page,
+                size,
+                totalPaginas,
+                totalProcedimentos,
                 procs.stream().map(this::toResponse).toList(),
-                cboMap, cidMap, procCboMap, procCidMap
+                cboMap,
+                cidMap,
+                procCboMap,
+                procCidMap
         );
     }
 
