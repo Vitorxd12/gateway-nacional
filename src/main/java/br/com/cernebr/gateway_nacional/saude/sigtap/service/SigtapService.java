@@ -11,10 +11,12 @@ import br.com.cernebr.gateway_nacional.saude.sigtap.dto.SigtapStatusResponse;
 import br.com.cernebr.gateway_nacional.saude.sigtap.dto.SigtapValorResumoResponse;
 import br.com.cernebr.gateway_nacional.saude.sigtap.dto.AuditoriaSigtapDTO;
 import br.com.cernebr.gateway_nacional.saude.sigtap.config.SigtapProperties;
+import br.com.cernebr.gateway_nacional.saude.sigtap.etl.SigtapEtlService;
 import br.com.cernebr.gateway_nacional.saude.sigtap.jdbc.SigtapJdbc;
 import br.com.cernebr.gateway_nacional.saude.sigtap.model.SigtapModels.Cbo;
 import br.com.cernebr.gateway_nacional.saude.sigtap.model.SigtapModels.Cid;
 import br.com.cernebr.gateway_nacional.saude.sigtap.model.SigtapModels.Dataset;
+import br.com.cernebr.gateway_nacional.saude.sigtap.model.SigtapModels.DatasetStatus;
 import br.com.cernebr.gateway_nacional.saude.sigtap.model.SigtapModels.Procedimento;
 import br.com.cernebr.gateway_nacional.saude.sigtap.model.SigtapModels.ProcedimentoCbo;
 import br.com.cernebr.gateway_nacional.saude.sigtap.model.SigtapModels.ProcedimentoCid;
@@ -22,6 +24,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -59,36 +63,101 @@ public class SigtapService {
     private static final Duration SOFT_TTL = Duration.ofDays(7);
 
     private final ObjectProvider<SigtapJdbc> jdbcProvider;
-    private final ObjectProvider<SigtapProperties> propsProvider;
+    private final SigtapProperties props;
+    private final ObjectProvider<SigtapEtlService> etlProvider;
     private final RefreshAheadCache cache;
 
     public SigtapService(ObjectProvider<SigtapJdbc> jdbcProvider,
-                         ObjectProvider<SigtapProperties> propsProvider,
+                         SigtapProperties props,
+                         ObjectProvider<SigtapEtlService> etlProvider,
                          RefreshAheadCache cache) {
         this.jdbcProvider = jdbcProvider;
-        this.propsProvider = propsProvider;
+        this.props = props;
+        this.etlProvider = etlProvider;
         this.cache = cache;
     }
 
+
     // ──────────────────────────────────────────────────────────────────
-    //  Status (sempre disponível, mesmo desabilitado)
+    //  ZIP da competência ativa
     // ──────────────────────────────────────────────────────────────────
+
+    /**
+     * Localiza o arquivo .zip físico da competência ativa no workDir.
+     * O ZIP é mantido após a ingestão e apagado apenas quando uma nova
+     * competência é promovida com sucesso.
+     */
+    public Path getArquivoZipAtual() {
+        DataAccess da = require();
+        String filename = "TabelaUnificada_" + da.dataset.competencia() + "_v" + da.dataset.revisao() + ".zip";
+        Path zip = Path.of(props.etl().workDir()).resolve(filename);
+
+        if (!Files.exists(zip)) {
+            throw new ResourceNotFoundException("SIGTAP",
+                    "O arquivo ZIP da competência " + da.dataset.competencia()
+                    + " não está disponível no servidor. Execute /atualizar para baixá-lo.");
+        }
+        return zip;
+    }
+
     public SigtapStatusResponse status() {
         SigtapJdbc jdbc = jdbcProvider.getIfAvailable();
-        SigtapProperties props = propsProvider.getIfAvailable();
-        if (jdbc == null || props == null) {
-            return new SigtapStatusResponse(null, null, false, false,
-                    "(desativado — habilite GATEWAY_SIGTAP_CRON_ENABLED=true)", null);
-        }
-        Optional<Dataset> active = jdbc.findActive();
-        boolean staging = jdbc.findStaging().isPresent();
-        return new SigtapStatusResponse(
-                active.map(Dataset::competencia).orElse(null),
-                active.map(Dataset::promotedAt).orElse(null),
-                staging,
+
+        SigtapStatusResponse.ConfiguracaoDTO config = new SigtapStatusResponse.ConfiguracaoDTO(
                 props.cron().enabled(),
                 props.cron().expression(),
-                active.map(Dataset::sourceUrl).orElse(null));
+                props.etl().workDir()
+        );
+
+        if (jdbc == null) {
+            return new SigtapStatusResponse(config, null, null, List.of());
+        }
+
+        Optional<Dataset> active = jdbc.findActive();
+        List<Dataset> history = jdbc.findRecentHistory(5);
+        Optional<Dataset> lastAttempt = history.stream().findFirst();
+
+        SigtapStatusResponse.BaseAtivaDTO baseAtiva = active.map(ds -> new SigtapStatusResponse.BaseAtivaDTO(
+                ds.competencia(),
+                ds.revisao(),
+                ds.promotedAt(),
+                jdbc.contarProcedimentos(ds.id()),
+                ds.sourceUrl()
+        )).orElse(null);
+
+        SigtapStatusResponse.UltimaExecucaoDTO ultima = lastAttempt.map(ds -> new SigtapStatusResponse.UltimaExecucaoDTO(
+                ds.startedAt(),
+                ds.status().name(),
+                ds.notes(),
+                ds.status() == DatasetStatus.STAGING
+        )).orElse(null);
+
+        List<SigtapStatusResponse.HistoricoDatasetDTO> historico = history.stream()
+                .map(ds -> new SigtapStatusResponse.HistoricoDatasetDTO(
+                        ds.id(),
+                        ds.competencia(),
+                        ds.revisao(),
+                        ds.status().name(),
+                        ds.startedAt(),
+                        ds.notes()
+                )).toList();
+
+        return new SigtapStatusResponse(config, baseAtiva, ultima, historico);
+    }
+
+    /**
+     * Força a execução do ETL em background (ou síncrono, se preferir).
+     * Aqui chamamos de forma síncrona para que o cliente saiba o resultado imediato.
+     */
+    public SigtapStatusResponse atualizar() {
+        SigtapEtlService etl = etlProvider.getIfAvailable();
+        if (etl == null) {
+            throw new ResourceUnavailableException("SIGTAP",
+                    "Motor de ETL desativado. Habilite GATEWAY_SIGTAP_CRON_ENABLED=true para atualizar.");
+        }
+        log.info("[SIGTAP] Gatilho manual de atualização acionado.");
+        etl.executar();
+        return status();
     }
 
     // ──────────────────────────────────────────────────────────────────

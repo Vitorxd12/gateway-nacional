@@ -14,6 +14,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 
 import java.net.URI;
 import java.time.OffsetDateTime;
@@ -35,6 +36,25 @@ public class GlobalExceptionHandler {
     private static final URI TYPE_RESOURCE_UNAVAIL = URI.create("https://api.gateway-nacional.com.br/errors/resource-unavailable");
     private static final URI TYPE_RESOURCE_NOTFOUND = URI.create("https://api.gateway-nacional.com.br/errors/resource-not-found");
     private static final URI TYPE_INTERNAL         = URI.create("https://api.gateway-nacional.com.br/errors/internal");
+    private static final URI TYPE_METHOD_NOT_ALLOWED = URI.create("https://api.gateway-nacional.com.br/errors/method-not-allowed");
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ProblemDetail> handleMethodNotAllowed(HttpRequestMethodNotSupportedException ex,
+                                                                HttpServletRequest request) {
+        String allowed = ex.getSupportedHttpMethods() != null
+                ? ex.getSupportedHttpMethods().toString()
+                : "desconhecido";
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.METHOD_NOT_ALLOWED,
+                "Método '" + ex.getMethod() + "' não permitido para este endpoint. Use: " + allowed
+        );
+        problem.setTitle("Método não permitido");
+        problem.setType(TYPE_METHOD_NOT_ALLOWED);
+        problem.setInstance(URI.create(request.getRequestURI()));
+        problem.setProperty("timestamp", OffsetDateTime.now());
+        problem.setProperty("allowedMethods", allowed);
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).body(problem);
+    }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ProblemDetail> handleValidation(MethodArgumentNotValidException ex,
@@ -219,6 +239,30 @@ public class GlobalExceptionHandler {
         problem.setProperty("timestamp", OffsetDateTime.now());
 
         return ResponseEntity.badRequest().body(problem);
+    }
+
+    @ExceptionHandler(br.com.cernebr.gateway_nacional.saude.sigtap.etl.SigtapEtlException.class)
+    public ResponseEntity<ProblemDetail> handleSigtapEtl(
+            br.com.cernebr.gateway_nacional.saude.sigtap.etl.SigtapEtlException ex,
+            HttpServletRequest request) {
+        String traceId = newTraceId();
+
+        log.error("[traceId={}] SIGTAP ETL failed on {} {}: {}",
+                traceId, request.getMethod(), request.getRequestURI(), ex.getMessage(), ex);
+
+        String detail = ex.getMessage() != null && !ex.getMessage().isBlank()
+                ? ex.getMessage()
+                : "Falha no pipeline de ingestão do SIGTAP. Verifique conectividade com o FTP do DataSUS.";
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, detail);
+        problem.setTitle("Falha na sincronização SIGTAP");
+        problem.setType(TYPE_RESOURCE_UNAVAIL);
+        problem.setInstance(URI.create(request.getRequestURI()));
+        problem.setProperty("timestamp", OffsetDateTime.now());
+        problem.setProperty("traceId", traceId);
+        problem.setProperty("provider", "DataSUS/FTP");
+
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(problem);
     }
 
     @ExceptionHandler(Exception.class)

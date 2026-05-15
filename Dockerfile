@@ -28,6 +28,9 @@ RUN addgroup -S app && adduser -S app -G app
 WORKDIR /app
 
 COPY --from=builder /build/target/*.jar app.jar
+# Create data and work directories with correct permissions before switching user
+RUN mkdir -p /app/data /home/app/.gateway-nacional && \
+    chown -R app:app /app /home/app/.gateway-nacional
 
 USER app
 EXPOSE 8080

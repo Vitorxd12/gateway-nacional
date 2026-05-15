@@ -52,6 +52,9 @@ services:
         condition: service_started
       sisab-sidecar:
         condition: service_healthy
+    volumes:
+      - sigtap-db:/app/data                       # Persiste o banco SQLite (Indexador SIGTAP)
+      - sigtap-work:/home/app/.gateway-nacional   # Persiste o ZIP da competência (Download)
     networks:
       - gateway-net
 
@@ -106,3 +109,5 @@ networks:
 
 volumes:
   redis-data:
+  sigtap-db:
+  sigtap-work:

@@ -8,6 +8,7 @@ import br.com.cernebr.gateway_nacional.saude.sigtap.model.SigtapModels.DatasetSt
 import br.com.cernebr.gateway_nacional.saude.sigtap.model.SigtapModels.Procedimento;
 import br.com.cernebr.gateway_nacional.saude.sigtap.model.SigtapModels.ProcedimentoCbo;
 import br.com.cernebr.gateway_nacional.saude.sigtap.model.SigtapModels.ProcedimentoCid;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -57,6 +58,7 @@ public class SigtapJdbc {
     // ──────────────────────────────────────────────────────────────────
     //  Schema bootstrap — programático, idempotente, sem migrations.
     // ──────────────────────────────────────────────────────────────────
+    @PostConstruct
     public void ensureSchema() {
         jdbc.execute("""
                 CREATE TABLE IF NOT EXISTS sigtap_dataset (
@@ -246,6 +248,12 @@ public class SigtapJdbc {
         } catch (EmptyResultDataAccessException ex) {
             return Optional.empty();
         }
+    }
+
+    public List<Dataset> findRecentHistory(int limit) {
+        return jdbc.query(
+                "SELECT * FROM sigtap_dataset ORDER BY id DESC LIMIT ?",
+                DATASET_MAPPER, limit);
     }
 
     // ──────────────────────────────────────────────────────────────────

@@ -84,6 +84,14 @@
 			<artifactId>bucket4j_jdk17-lettuce</artifactId>
 			<version>8.14.0</version>
 		</dependency>
+		<!-- Apache Commons Net — cliente FTP com suporte explícito a modo
+		     passivo (PASV), necessário para funcionar dentro de containers
+		     Docker onde o FTP ativo é bloqueado pelo NAT. -->
+		<dependency>
+			<groupId>commons-net</groupId>
+			<artifactId>commons-net</artifactId>
+			<version>3.11.1</version>
+		</dependency>
 		<dependency>
 			<groupId>org.jsoup</groupId>
 			<artifactId>jsoup</artifactId>

@@ -4,6 +4,7 @@ import br.com.cernebr.gateway_nacional.saude.sigtap.config.SigtapProperties;
 import br.com.cernebr.gateway_nacional.saude.sigtap.fixture.SigtapFixtureLoader;
 import br.com.cernebr.gateway_nacional.saude.sigtap.fixture.SigtapFixtureLoader.Fixture;
 import br.com.cernebr.gateway_nacional.saude.sigtap.jdbc.SigtapJdbc;
+import br.com.cernebr.gateway_nacional.saude.sigtap.model.SigtapModels.Dataset;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -13,6 +14,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Optional;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -72,46 +74,71 @@ public class SigtapEtlService {
     }
 
     /**
-     * Ponto de entrada do scheduler. Verifica se já há ACTIVE para a
-     * competência corrente; em caso afirmativo, no-op (idempotente).
+     * Ponto de entrada do scheduler. Busca o pacote mais recente no FTP
+     * do DataSUS e o ingere se ainda não for o ACTIVE atual.
      */
     public boolean executar() {
         jdbc.ensureSchema();
-        String comp = downloader.competenciaAtual();
-        if (jdbc.hasActiveForCompetencia(comp)) {
-            log.info("[SIGTAP ETL] Competência {} já ativa — nada a fazer.", comp);
-            return true;
+        log.info("[SIGTAP ETL] Buscando último pacote no FTP...");
+        SigtapDownloader.InfoPacote info = downloader.buscarUltimoPacote();
+
+        if (jdbc.hasActiveForCompetencia(info.competencia())) {
+            // Se já temos a competência ativa, verificamos se a revisão mudou.
+            // O DataSUS às vezes republica o mesmo mês com correções.
+            Optional<Dataset> active = jdbc.findActive();
+            if (active.isPresent() && info.revisao().equals(active.get().revisao())) {
+                log.info("[SIGTAP ETL] Competência {} v{} já ativa — nada a fazer.",
+                        info.competencia(), info.revisao());
+                return true;
+            }
+            log.info("[SIGTAP ETL] Nova revisão encontrada para {}: v{} (atual: v{})",
+                    info.competencia(), info.revisao(), active.map(a -> a.revisao()).orElse("?"));
         }
-        return ingerirCompetencia(comp, "1");
+
+        return ingerirPacote(info);
     }
 
     /**
-     * Carrega a competência informada (download real). Usado pelo
-     * scheduler e por trigger manual.
+     * Ingestão direta de um InfoPacote (descoberto via FTP).
+     * O ZIP é salvo em disco e mantido após a ingestão bem-sucedida.
+     * O ZIP da competência anterior (é apagado somente após a promoção).
+     * Em caso de falha, o ZIP novo é apagado e o antigo permanece.
      */
-    public boolean ingerirCompetencia(String competencia, String revisao) {
-        log.info("[SIGTAP ETL] Iniciando ingestão competência={} revisao={}", competencia, revisao);
+    public boolean ingerirPacote(SigtapDownloader.InfoPacote info) {
+        log.info("[SIGTAP ETL] Iniciando ingestão automática: {}", info.nomeArquivo());
         jdbc.ensureSchema();
         Path workDir = Path.of(props.etl().workDir());
 
-        String sourceUrl = props.download().pacoteUrlTemplate()
-                .replace("{competencia}", competencia)
-                .replace("{revisao}", revisao);
-        long datasetId = jdbc.createStagingDataset(competencia, revisao, sourceUrl);
+        String baseUrl = props.download().pacoteUrlTemplate()
+                .substring(0, props.download().pacoteUrlTemplate().lastIndexOf("/") + 1);
+        String sourceUrl = baseUrl + info.nomeArquivo();
+
+        // Captura o ZIP antigo (ACTIVE atual) antes de criar o staging
+        Optional<Dataset> previousActive = jdbc.findActive();
+        Path previousZip = previousActive.map(d -> zipPath(workDir, d)).orElse(null);
+
+        long datasetId = jdbc.createStagingDataset(info.competencia(), info.revisao(), sourceUrl);
+        Path newZip = null;
 
         try {
-            Path zip = downloader.baixarPacote(competencia, revisao, workDir);
-            Path extracted = extrair(zip, workDir.resolve("ext-" + datasetId));
-            parsearEInserir(datasetId, extracted, competencia);
-            promover(datasetId, competencia);
+            newZip = downloader.baixarPacote(info, workDir);
+            Path extracted = extrair(newZip, workDir.resolve("ext-" + datasetId));
+            parsearEInserir(datasetId, extracted, info.competencia());
+            limparDirExtracted(extracted);
+            promover(datasetId, info.competencia(), previousZip);
             return true;
         } catch (Exception ex) {
             jdbc.markFailed(datasetId, "ETL falhou: " + ex.getMessage());
-            log.error("[SIGTAP ETL] Ingestão competência={} falhou. Dataset {} marcado FAILED.",
-                    competencia, datasetId, ex);
+            log.error("[SIGTAP ETL] Ingestão do pacote {} falhou. Dataset {} marcado FAILED.",
+                    info.nomeArquivo(), datasetId, ex);
+            // Apaga o ZIP novo para não deixar lixo — o antigo permanece intocado
+            if (newZip != null) {
+                deleteSilently(newZip, "ZIP novo (rollback)");
+            }
             throw ex instanceof SigtapEtlException se ? se : new SigtapEtlException(ex.getMessage(), ex);
         }
     }
+
 
     /**
      * Carrega o fixture embarcado como ACTIVE. Útil em primeiro boot
@@ -129,7 +156,7 @@ public class SigtapEtlService {
             jdbc.batchInsertProcedimentos(datasetId, fixtureLoader.toProcedimentos(datasetId, f));
             jdbc.batchInsertProcCbo(datasetId, fixtureLoader.toProcCbo(datasetId, f));
             jdbc.batchInsertProcCid(datasetId, fixtureLoader.toProcCid(datasetId, f));
-            promover(datasetId, f.competencia());
+            promover(datasetId, f.competencia(), null); // fixture não tem ZIP anterior em disco
             return true;
         } catch (Exception ex) {
             jdbc.markFailed(datasetId, "Fixture ETL falhou: " + ex.getMessage());
@@ -189,7 +216,33 @@ public class SigtapEtlService {
         }
     }
 
-    private void promover(long datasetId, String competencia) {
+    private Path zipPath(Path workDir, Dataset d) {
+        return workDir.resolve("TabelaUnificada_" + d.competencia() + "_v" + d.revisao() + ".zip");
+    }
+
+    private void limparDirExtracted(Path dir) {
+        try {
+            if (Files.exists(dir)) {
+                try (var stream = Files.walk(dir)) {
+                    stream.sorted(java.util.Comparator.reverseOrder())
+                          .forEach(p -> deleteSilently(p, "arquivo extraído"));
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("[SIGTAP ETL] Falha ao limpar diretório extraído {}: {}", dir, ex.getMessage());
+        }
+    }
+
+    private void deleteSilently(Path path, String label) {
+        try {
+            Files.deleteIfExists(path);
+            log.debug("[SIGTAP ETL] Removido {}: {}", label, path);
+        } catch (Exception ex) {
+            log.warn("[SIGTAP ETL] Não foi possível remover {} {}: {}", label, path, ex.getMessage());
+        }
+    }
+
+    private void promover(long datasetId, String competencia, Path previousZip) {
         int total = jdbc.contarProcedimentos(datasetId);
         if (total < MIN_PROCEDIMENTOS_PARA_PROMOCAO) {
             jdbc.markFailed(datasetId, "Validação reprovou: apenas " + total + " procedimentos no dataset.");
@@ -201,6 +254,11 @@ public class SigtapEtlService {
         invalidarCache();
         log.info("[SIGTAP ETL] Dataset {} (competência {}) promovido para ACTIVE — {} procedimentos.",
                 datasetId, competencia, total);
+
+        // Apaga o ZIP antigo somente após promoção atômica bem-sucedida
+        if (previousZip != null) {
+            deleteSilently(previousZip, "ZIP antigo (pós-promoção)");
+        }
     }
 
     private void invalidarCache() {
