@@ -21,10 +21,17 @@ import org.springframework.http.ProblemDetail;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
+
+import java.nio.file.Path;
 import java.util.List;
 
 @Validated
@@ -43,11 +50,38 @@ public class SigtapController {
     }
 
     @GetMapping(value = "/status", produces = MediaType.APPLICATION_JSON_VALUE)
-    @Operation(summary = "Saúde do motor SIGTAP",
-            description = "Competência ativa, flag do cron, ETL em andamento. Sempre responde 200 (não exige base carregada).")
+    @Operation(summary = "Status detalhado do motor SIGTAP",
+            description = "Retorna configurações, dados da base ativa, detalhes da última tentativa de sincronização e histórico recente de datasets.")
     public SigtapStatusResponse status() {
         return service.status();
     }
+
+    @PostMapping(value = "/atualizar", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "Força a atualização imediata do SIGTAP",
+            description = "Aciona o motor de busca automática no FTP do DataSUS e realiza a ingestão se houver nova competência ou revisão disponível.")
+    public SigtapStatusResponse atualizar() {
+        return service.atualizar();
+    }
+
+    @GetMapping(value = "/download", produces = "application/zip")
+    @Operation(summary = "Baixa o pacote .zip original da competência ativa",
+            description = "Serve o arquivo compactado que foi baixado do DataSUS. O ZIP é mantido em disco e substituído apenas quando uma nova competência é promovida com sucesso.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "ZIP disponível para download"),
+            @ApiResponse(responseCode = "404", description = "ZIP ainda não disponível — execute POST /atualizar primeiro",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "503", description = "Módulo desativado ou base não carregada",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))
+    })
+    public ResponseEntity<Resource> download() {
+        Path path = service.getArquivoZipAtual();
+        Resource resource = new FileSystemResource(path);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"" + path.getFileName() + "\"")
+                .body(resource);
+    }
+
 
     @GetMapping(value = "/procedimentos/{codigo}", produces = MediaType.APPLICATION_JSON_VALUE)
     @Operation(summary = "Detalhes completos do procedimento por código SIGTAP")

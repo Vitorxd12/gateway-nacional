@@ -359,8 +359,7 @@ gateway:
         # URL canônica do DataSUS para o pacote mensal. O placeholder
         # {competencia} é substituído em runtime por AAAAMM (ex: 202605).
         # Caso o gov mude o domínio, sobrescrever via env sem redeploy.
-        base-url: ${GATEWAY_SIGTAP_DOWNLOAD_URL:http://sigtap.datasus.gov.br/tabela-unificada/app/sec/inicio.jsp}
-        pacote-url-template: ${GATEWAY_SIGTAP_PACOTE_URL:ftp://ftp2.datasus.gov.br/public/sistemas/tup/downloads/TabelaUnificada_{competencia}_v{revisao}.zip}
+        pacote-url-template: ${GATEWAY_SIGTAP_PACOTE_URL:ftp://ftp2.datasus.gov.br/pub/sistemas/tup/downloads/TabelaUnificada_{competencia}_v{revisao}.zip}
         timeout-ms: 60000
       retry:
         # Exponential backoff entre tentativas dentro da mesma execução do job.

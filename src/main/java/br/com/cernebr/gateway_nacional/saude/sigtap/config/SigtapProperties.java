@@ -22,7 +22,7 @@ public record SigtapProperties(
     public record Cron(boolean enabled, String expression) {
     }
 
-    public record Download(String baseUrl, String pacoteUrlTemplate, int timeoutMs) {
+    public record Download(String pacoteUrlTemplate, int timeoutMs) {
     }
 
     public record Retry(int maxAttempts, long initialDelayMs, double multiplier) {
