@@ -110,7 +110,7 @@ public class SigtapService {
         );
 
         if (jdbc == null) {
-            return new SigtapStatusResponse(config, null, null, List.of());
+            return new SigtapStatusResponse(config, null, null, List.of(), List.of());
         }
 
         Optional<Dataset> active = jdbc.findActive();
@@ -142,7 +142,15 @@ public class SigtapService {
                         ds.notes()
                 )).toList();
 
-        return new SigtapStatusResponse(config, baseAtiva, ultima, historico);
+        SigtapEtlService etl = etlProvider.getIfAvailable();
+        List<String> logs = (etl != null) ? etl.getRecentLogs() : List.of();
+
+        return new SigtapStatusResponse(config, baseAtiva, ultima, historico, logs);
+    }
+
+    public List<String> getCurrentRunLogs() {
+        SigtapEtlService etl = etlProvider.getIfAvailable();
+        return (etl != null) ? etl.getCurrentRunLogs() : List.of();
     }
 
     /**

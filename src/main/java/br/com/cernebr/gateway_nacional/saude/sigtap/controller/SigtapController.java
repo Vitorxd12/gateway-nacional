@@ -57,10 +57,64 @@ public class SigtapController {
     }
 
     @PostMapping(value = "/atualizar", produces = MediaType.APPLICATION_JSON_VALUE)
-    @Operation(summary = "Força a atualização imediata do SIGTAP",
-            description = "Aciona o motor de busca automática no FTP do DataSUS e realiza a ingestão se houver nova competência ou revisão disponível.")
+    @Operation(summary = "Força a atualização imediata do SIGTAP (JSON)",
+            description = "Aciona o motor de busca automática e aguarda a finalização para retornar o JSON de status.")
     public SigtapStatusResponse atualizar() {
         return service.atualizar();
+    }
+
+    @PostMapping(value = "/atualizar/stream", produces = MediaType.TEXT_PLAIN_VALUE)
+    @Operation(summary = "Força a atualização com streaming de logs (Ideal para Terminal/Curl)",
+            description = "Inicia o processo e mantém a conexão aberta, devolvendo os logs linha a linha em tempo real.")
+    public ResponseEntity<org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody> atualizarStream() {
+        org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody responseBody = outputStream -> {
+            java.io.PrintWriter writer = new java.io.PrintWriter(
+                    new java.io.BufferedWriter(new java.io.OutputStreamWriter(outputStream, java.nio.charset.StandardCharsets.UTF_8)),
+                    true
+            );
+            writer.println("[SIGTAP] Iniciando streaming de logs em tempo real...");
+            writer.flush();
+            
+            // Inicia o processo em background e monitora o término
+            Thread worker = new Thread(() -> {
+                try { service.atualizar(); } catch (Exception e) { /* Logado no service */ }
+            });
+            worker.start();
+            
+            int lastIdx = 0;
+            while (worker.isAlive()) {
+                lastIdx = flushLogs(writer, lastIdx);
+                try { Thread.sleep(200); } catch (InterruptedException e) { break; }
+            }
+            
+            // Dreno final para não perder as últimas mensagens
+            try { Thread.sleep(500); } catch (InterruptedException e) { }
+            flushLogs(writer, lastIdx);
+            
+            writer.println("[SIGTAP] Sincronização concluída.");
+            writer.flush();
+        };
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.TEXT_PLAIN)
+                .header(HttpHeaders.CONTENT_ENCODING, "identity") // Prevent gzip compression buffering
+                .header(HttpHeaders.CONNECTION, "keep-alive")
+                .header("X-Content-Type-Options", "nosniff")
+                .header("X-Accel-Buffering", "no") // Prevent Nginx proxy buffering
+                .header(HttpHeaders.CACHE_CONTROL, "no-cache, no-store, must-revalidate")
+                .body(responseBody);
+    }
+
+    private int flushLogs(java.io.PrintWriter writer, int lastIdx) {
+        List<String> logs = service.getCurrentRunLogs();
+        if (logs.size() > lastIdx) {
+            for (int i = lastIdx; i < logs.size(); i++) {
+                writer.println(logs.get(i));
+            }
+            writer.flush();
+            return logs.size();
+        }
+        return lastIdx;
     }
 
     @GetMapping(value = "/download", produces = "application/zip")

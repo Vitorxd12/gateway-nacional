@@ -33,6 +33,12 @@ public class PositionalParser {
 
     private static final Charset DATASUS_CHARSET = StandardCharsets.ISO_8859_1;
 
+    private final SigtapLogService logService;
+
+    public PositionalParser(SigtapLogService logService) {
+        this.logService = logService;
+    }
+
     public void parse(InputStream stream, PositionalLayout layout,
                       Consumer<Map<String, String>> rowHandler) {
         try (BufferedReader reader = new BufferedReader(
@@ -47,7 +53,12 @@ public class PositionalParser {
                 }
                 rowHandler.accept(row);
                 parsed++;
+                
+                if (parsed % 10000 == 0) {
+                    logService.log(String.format("[SIGTAP ETL] -> [%s] ... %d linhas parseadas", layout.tableName(), parsed));
+                }
             }
+            logService.log(String.format("[SIGTAP ETL] -> [%s] Concluído: %d linhas processadas.", layout.tableName(), parsed));
             log.info("[PositionalParser] {}: {} linhas processadas", layout.tableName(), parsed);
         } catch (IOException ex) {
             throw new SigtapEtlException("Falha ao parsear " + layout.tableName() + ": " + ex.getMessage(), ex);

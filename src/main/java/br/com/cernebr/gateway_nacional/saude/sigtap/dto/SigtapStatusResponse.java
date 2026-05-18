@@ -19,7 +19,10 @@ public record SigtapStatusResponse(
         UltimaExecucaoDTO ultimaExecucao,
 
         @Schema(description = "Histórico dos últimos 5 datasets processados (incluindo falhas e staging)")
-        List<HistoricoDatasetDTO> historicoRecente
+        List<HistoricoDatasetDTO> historicoRecente,
+
+        @Schema(description = "Logs recentes da execução atual ou última tentativa", example = "[\"[14:30:01] Iniciando...\", \"[14:30:05] Extraindo...\"]")
+        List<String> logs
 ) {
     public record ConfiguracaoDTO(
             @Schema(description = "Indica se o motor está autorizado a rodar", example = "true")
