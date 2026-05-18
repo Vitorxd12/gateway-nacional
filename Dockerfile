@@ -33,7 +33,7 @@ RUN mkdir -p /app/data /home/app/.gateway-nacional && \
     chown -R app:app /app /home/app/.gateway-nacional
 
 USER app
-EXPOSE 8085
+EXPOSE 8080
 
 # MaxRAMPercentage=75 plays nicely with container memory limits.
 # UseContainerSupport is on by default since JDK 10 but kept explicit for clarity.

@@ -34,7 +34,7 @@ spring:
       - org.springframework.boot.jdbc.autoconfigure.health.DataSourceHealthContributorAutoConfiguration
 
 server:
-  port: 8085
+  port: 8080
   # Encerramento gracioso: drena requests em voo antes de finalizar (importante em rolling deploys).
   shutdown: graceful
 
