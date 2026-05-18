@@ -351,7 +351,7 @@ gateway:
       # GATEWAY_SIGTAP_CRON_ENABLED=true para autorizar consumo de banda
       # e gravação em disco. O zip mensal tem ~25MB; o processo ~2 min.
       cron:
-        enabled: ${GATEWAY_SIGTAP_CRON_ENABLED:true}
+        enabled: ${GATEWAY_SIGTAP_CRON_ENABLED:false}
         # Madrugada para minimizar concorrência com tráfego operacional.
         # Cron 6-campos (Spring): seg min hor dia-mês mês dia-semana
         expression: ${GATEWAY_SIGTAP_CRON:0 0 3 * * *}
