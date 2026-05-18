@@ -9,10 +9,12 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -39,9 +41,11 @@ public class SigtapDownloader {
             Pattern.compile("TabelaUnificada_(\\d{6})_v(\\d+)\\.zip");
 
     private final SigtapProperties props;
+    private final SigtapLogService logService;
 
-    public SigtapDownloader(SigtapProperties props) {
+    public SigtapDownloader(SigtapProperties props, SigtapLogService logService) {
         this.props = props;
+        this.logService = logService;
     }
 
     public record InfoPacote(String competencia, String revisao, String nomeArquivo) {}
@@ -67,25 +71,52 @@ public class SigtapDownloader {
                 throw new SigtapEtlException("Nenhum arquivo encontrado no diretório FTP: " + coords.dir());
             }
 
-            InfoPacote latest = null;
+            java.util.List<FTPFile> matchedFiles = new java.util.ArrayList<>();
             for (FTPFile file : files) {
-                Matcher m = FILENAME_PATTERN.matcher(file.getName());
-                if (m.matches()) {
-                    String comp = m.group(1);
-                    String rev  = m.group(2);
-                    if (latest == null
-                            || comp.compareTo(latest.competencia()) > 0
-                            || (comp.equals(latest.competencia()) && rev.compareTo(latest.revisao()) > 0)) {
-                        latest = new InfoPacote(comp, rev, file.getName());
-                    }
+                if (file != null && file.getName() != null && FILENAME_PATTERN.matcher(file.getName()).matches()) {
+                    matchedFiles.add(file);
                 }
             }
 
-            if (latest == null) {
+            if (matchedFiles.isEmpty()) {
                 throw new SigtapEtlException("Nenhum pacote SIGTAP reconhecido no diretório FTP: " + coords.dir());
             }
 
-            log.info("[SIGTAP] Último pacote encontrado: {}", latest.nomeArquivo());
+            // Ordena os pacotes por relevância (competência e revisão crescente)
+            matchedFiles.sort((f1, f2) -> {
+                Matcher m1 = FILENAME_PATTERN.matcher(f1.getName());
+                Matcher m2 = FILENAME_PATTERN.matcher(f2.getName());
+                m1.matches();
+                m2.matches();
+                String comp1 = m1.group(1);
+                String rev1  = m1.group(2);
+                String comp2 = m2.group(1);
+                String rev2  = m2.group(2);
+                int compCmp = comp1.compareTo(comp2);
+                if (compCmp != 0) return compCmp;
+                return Integer.compare(Integer.parseInt(rev1), Integer.parseInt(rev2));
+            });
+
+            // Seleciona os últimos 10 mais recentes para exibir nos logs
+            int totalPacotes = matchedFiles.size();
+            int startIndex = Math.max(0, totalPacotes - 10);
+            
+            logService.log("[SIGTAP ETL] --- ÚLTIMOS 10 PACOTES FTP DATASUS ---");
+            for (int i = startIndex; i < totalPacotes; i++) {
+                FTPFile file = matchedFiles.get(i);
+                String sizeStr = String.format("%.2f MB", file.getSize() / 1024.0 / 1024.0);
+                logService.log(String.format("[SIGTAP ETL] [%02d] %s (%s)", (i - startIndex + 1), file.getName(), sizeStr));
+            }
+            logService.log("[SIGTAP ETL] --------------------------------------------");
+
+            // O pacote mais recente é o último da lista ordenada
+            FTPFile latestFile = matchedFiles.get(totalPacotes - 1);
+            Matcher m = FILENAME_PATTERN.matcher(latestFile.getName());
+            m.matches();
+            InfoPacote latest = new InfoPacote(m.group(1), m.group(2), latestFile.getName());
+
+            logService.log("[SIGTAP ETL] Total de " + totalPacotes + " pacotes mapeados no FTP.");
+            logService.log("[SIGTAP ETL] O pacote mais recente escolhido foi: " + latest.nomeArquivo());
             return latest;
 
         } catch (IOException ex) {
@@ -118,18 +149,51 @@ public class SigtapDownloader {
         FTPClient ftp = new FTPClient();
         try {
             conectar(ftp, coords);
+            
+            logService.log("[SIGTAP ETL] Conectado ao FTP. Preparando diretório local...");
+            Files.createDirectories(destFile.getParent());
+            
+            logService.log("[SIGTAP ETL] Iniciando transferência de " + info.nomeArquivo());
             ftp.setFileType(FTP.BINARY_FILE_TYPE);
+            ftp.setDataTimeout((int) Duration.ofSeconds(30).toMillis()); // 30s de timeout para dados
+            
+            logService.log("[SIGTAP ETL] DEBUG: Abrindo stream de rede...");
+            try (OutputStream out = Files.newOutputStream(destFile);
+                 InputStream in = ftp.retrieveFileStream(remoteFile)) {
+                
+                logService.log("[SIGTAP ETL] DEBUG: Stream de rede aberto com sucesso.");
+                
+                if (in == null) {
+                    throw new SigtapEtlException("Não foi possível iniciar o stream de download para: " + remoteFile
+                            + " — Resposta do servidor: " + ftp.getReplyString().trim());
+                }
 
-            try (OutputStream out = Files.newOutputStream(destFile)) {
-                boolean ok = ftp.retrieveFile(remoteFile, out);
-                if (!ok) {
-                    throw new SigtapEtlException("FTP retrieveFile falhou para: " + remoteFile
-                            + " — reply: " + ftp.getReplyString().trim());
+                byte[] buffer = new byte[32768]; // 32KB buffer
+                int bytesRead;
+                long totalDownloaded = 0;
+                long lastLogAt = 0;
+                
+                while ((bytesRead = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, bytesRead);
+                    totalDownloaded += bytesRead;
+                    
+                    // Notifica a cada 1MB
+                    if (totalDownloaded - lastLogAt >= 1024 * 1024) {
+                        String progresso = String.format("%.1f", totalDownloaded / 1024.0 / 1024.0);
+                        logService.log("[SIGTAP ETL] Progresso do download: " + progresso + " MB...");
+                        lastLogAt = totalDownloaded;
+                    }
+                }
+                
+                // Importante para fechar a transação FTP corretamente
+                if (!ftp.completePendingCommand()) {
+                    throw new SigtapEtlException("Falha ao finalizar o comando de transferência no FTP.");
                 }
             }
 
             long size = Files.size(destFile);
-            log.info("[SIGTAP] Download concluído: {} bytes em {}", size, destFile);
+            String mbTotal = String.format("%.2f", size / 1024.0 / 1024.0);
+            logService.log("[SIGTAP ETL] Download concluído com sucesso: " + mbTotal + " MB salvos.");
             return destFile;
 
         } catch (IOException ex) {

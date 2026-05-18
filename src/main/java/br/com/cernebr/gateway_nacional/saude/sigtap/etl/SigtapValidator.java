@@ -21,9 +21,15 @@ public class SigtapValidator {
 
     private static final int MIN_PROCEDIMENTOS_ESPERADOS = 4000;
     private static final String CODIGO_PATTERN = "\\d{10}";
+    
+    private final SigtapLogService logService;
+
+    public SigtapValidator(SigtapLogService logService) {
+        this.logService = logService;
+    }
 
     public void validar(long datasetId, SigtapJdbc jdbc) {
-        log.info("[SIGTAP Validator] Iniciando sanity checks para dataset {}", datasetId);
+        logService.log("[SIGTAP ETL] Iniciando validação de integridade (Sanity Checks)...");
 
         // 1. Validação de Volume (Contagem total)
         int total = jdbc.contarProcedimentos(datasetId);
@@ -64,7 +70,7 @@ public class SigtapValidator {
             // mas logamos o alerta crítico.
         }
 
-        log.info("[SIGTAP Validator] Dataset {} aprovado nos sanity checks ({} procedimentos).", datasetId, total);
+        logService.log("[SIGTAP ETL] Validação concluída: " + total + " procedimentos aprovados.");
     }
 
     private boolean isZero(BigDecimal v) {

@@ -173,6 +173,9 @@ public class SigtapJdbc {
     //  Dataset lifecycle (Blue-Green)
     // ──────────────────────────────────────────────────────────────────
     public long createStagingDataset(String competencia, String revisao, String sourceUrl) {
+        // Limpa qualquer tentativa anterior de 'STAGING' para não dar erro de UNIQUE constraint
+        jdbc.update("DELETE FROM sigtap_dataset WHERE competencia = ? AND status = 'STAGING'", competencia);
+
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         // KeyHolder captura a PK gerada na MESMA conexão do INSERT.
         // Sem pool (SimpleDriverDataSource), cada chamada do JdbcTemplate
@@ -216,12 +219,16 @@ public class SigtapJdbc {
                 """, now.toString(), datasetId, competencia);
     }
 
-    public void markFailed(long datasetId, String reason) {
-        jdbc.update("""
-                UPDATE sigtap_dataset
-                   SET status='FAILED', notes=?
-                 WHERE id=?
-                """, reason, datasetId);
+    public void markFailed(long id, String notes) {
+        // Primeiro, descobrimos qual é a competência deste dataset
+        String competencia = jdbc.queryForObject("SELECT competencia FROM sigtap_dataset WHERE id = ?", String.class, id);
+        
+        // Removemos qualquer erro antigo deste mesmo mês para evitar o conflito de UNIQUE constraint
+        jdbc.update("DELETE FROM sigtap_dataset WHERE competencia = ? AND status = 'FAILED' AND id != ?", competencia, id);
+        
+        // Agora sim marcamos o atual como falho
+        jdbc.update("UPDATE sigtap_dataset SET status='FAILED', notes=?, finished_at=? WHERE id=?", 
+                notes, OffsetDateTime.now(ZoneOffset.UTC).toString(), id);
     }
 
     public Optional<Dataset> findActive() {
