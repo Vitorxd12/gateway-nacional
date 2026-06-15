@@ -99,6 +99,22 @@ public class IbgeEnrichmentService {
         return response.withIbge(entry.ibge(), entry.siafi(), entry.ddd());
     }
 
+    /**
+     * Resolve (UF, nome do município) → código IBGE de 7 dígitos, reusando o
+     * mesmo registro em memória e a normalização sem acento/caixa. Devolve
+     * {@code null} quando não há match. Usado pela Inteligência de Licitações
+     * para preencher o IBGE do órgão comprador — o PNCP entrega apenas o nome
+     * do município na unidade, e join por código é mais barato e exato que por nome.
+     */
+    public String resolveIbge(String uf, String municipio) {
+        String key = buildKey(uf, municipio);
+        if (key == null) {
+            return null;
+        }
+        MunicipioIbgeEntry entry = entryByLocation.get(key);
+        return entry == null ? null : entry.ibge();
+    }
+
     private static String buildKey(String uf, String localidade) {
         if (uf == null || uf.isBlank() || localidade == null || localidade.isBlank()) {
             return null;
