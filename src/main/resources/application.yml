@@ -409,6 +409,61 @@ gateway:
     licitanet:
       api-base-url: https://www.licitanet.com.br
       public-base-url: https://www.licitanet.com.br
+    inteligencia:
+      # Inteligência de cruzamento Licitações <-> Empresas participantes.
+      # ETL ingere a fase de RESULTADOS do PNCP (onde vivem os CNPJs de
+      # fornecedor) para um PostgreSQL analítico DEDICADO — desacoplado do
+      # gateway de federação ao vivo. OPT-IN, igual ao SIGTAP: enabled=false
+      # mantém o boot zero-cost (nenhum DataSource/Hikari/Jdbc instanciado,
+      # nenhuma conexão Postgres aberta, schema não provisionado).
+      enabled: ${GATEWAY_LIC_INTEL_ENABLED:false}
+      datasource:
+        url: ${LIC_INTEL_DB_URL:jdbc:postgresql://localhost:5432/cerne_intel}
+        username: ${LIC_INTEL_DB_USER:cerne}
+        password: ${LIC_INTEL_DB_PASS:}
+        # Pool enxuto: com Virtual Threads (Loom) a concorrência HTTP não exige
+        # pool grande — o pool é um portão para a capacidade do Postgres, não
+        # para o número de requests em voo. Dimensionar ao banco, não à carga.
+        pool-max-size: ${LIC_INTEL_POOL_MAX:16}
+        pool-min-idle: ${LIC_INTEL_POOL_MIN_IDLE:2}
+        connection-timeout-ms: ${LIC_INTEL_CONN_TIMEOUT_MS:10000}
+      ingestao:
+        # Cron 6-campos (Spring): seg min hor dia-mês mês dia-semana. Madrugada
+        # minimiza concorrência com tráfego operacional e respeita a quota dos
+        # portais frágeis. (Scheduler entra no M2.)
+        cron: ${LIC_INTEL_CRON:0 0 3 * * *}
+        # Reprocessa os últimos N dias de editais encerrados a cada execução.
+        janela-dias: ${LIC_INTEL_JANELA_DIAS:7}
+        # Teto de requisições/seg contra o PNCP durante a ingestão.
+        rate-limit-rps: ${LIC_INTEL_RPS:2}
+        # Códigos de modalidade do PNCP varridos pelo ETL (o endpoint
+        # /contratacoes/publicacao exige modalidade — iteramos a lista).
+        # 6=Pregão Eletrônico, 8=Dispensa, 4=Concorrência Eletrônica,
+        # 5=Concorrência Presencial, 12=Credenciamento.
+        modalidade-codigos: ${LIC_INTEL_MODALIDADES:6,8,4,5,12}
+      seed:
+        # Carga dirigida de validação no startup (AracajuSeedRunner). OPT-IN —
+        # roda UMA vez para conferir na prática o enriquecimento (CNAE+IBGE).
+        # O scheduler também usa municipio-ibge como alvo recorrente (MVP).
+        enabled: ${GATEWAY_LIC_INTEL_SEED_ENABLED:false}
+        # Aracaju/SE = 2800308.
+        municipio-ibge: ${LIC_INTEL_SEED_MUNICIPIO:2800308}
+        janela-dias: ${LIC_INTEL_SEED_JANELA_DIAS:180}
+      enriquecimento:
+        # M2.5 — worker assíncrono de backfill. A ingestão grava só o stub;
+        # este worker preenche CNAE/IBGE em lotes com delay, respeitando o
+        # rate-limit dos providers de CNPJ (evita o bloqueio por rajada).
+        enabled: ${GATEWAY_LIC_INTEL_ENRICH_ENABLED:true}
+        # Cron 6-campos (Spring): roda a cada 2 min por padrão, drenando a fila
+        # de pendentes aos poucos.
+        cron: ${LIC_INTEL_ENRICH_CRON:0 */2 * * * *}
+        # Empresas por lote e pausa entre lookups (ms) — o rate-limiter.
+        batch-size: ${LIC_INTEL_ENRICH_BATCH:25}
+        delay-ms: ${LIC_INTEL_ENRICH_DELAY_MS:400}
+      prospeccao:
+        # Refresh da materialized view mv_prospeccao (read-model do CRM).
+        # CONCURRENTLY não trava leituras. Default a cada 5 min.
+        refresh-cron: ${LIC_INTEL_PROSPECCAO_REFRESH_CRON:0 */5 * * * *}
   avaliacao:
     # Marketplaces consultados via Web Scraping. URLs e templates são
     # configuráveis porque a estrutura dos sites muda — basta sobrescrever
