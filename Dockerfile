@@ -3,7 +3,7 @@
 # ============================================================================
 # Stage 1 — Builder: compiles the fat jar inside a Maven + JDK 25 image.
 # ============================================================================
-FROM maven:3-eclipse-temurin-25 AS builder
+FROM maven:3-eclipse-temurin-26 AS builder
 
 WORKDIR /build
 
