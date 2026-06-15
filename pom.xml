@@ -113,6 +113,18 @@
 			<artifactId>sqlite-jdbc</artifactId>
 			<version>3.46.1.3</version>
 		</dependency>
+		<!-- Inteligência de Licitações — Postgres analítico DEDICADO ao
+		     cruzamento Licitações<->Empresas participantes (ingestão PNCP
+		     resultados/propostas). Isolado do gateway de federação ao vivo.
+		     HikariCP já vem no starter-jdbc; pool enxuto para Virtual Threads.
+		     Scope runtime + gating por gateway.licitacoes.inteligencia.enabled
+		     mantêm o boot zero-cost quando o módulo está desligado. Versão
+		     gerenciada pelo BOM do spring-boot-starter-parent. -->
+		<dependency>
+			<groupId>org.postgresql</groupId>
+			<artifactId>postgresql</artifactId>
+			<scope>runtime</scope>
+		</dependency>
 		<!-- Jackson XML data format — consome o XML legado do CPTEC/INPE
 		     (servicos.cptec.inpe.br) com o mesmo ObjectMapper já usado para
 		     JSON. Versão herdada do spring-boot-starter-json BOM. -->
